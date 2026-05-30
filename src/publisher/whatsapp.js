@@ -33,6 +33,8 @@ let pairingRequested = false;
 let pairingRefreshTimer = null;
 let reconnectTimer = null;
 let connectInFlight = false;
+const groupMetadataCache = new Map();
+const GROUP_METADATA_TTL_MS = 5 * 60 * 1000;
 const PAIRING_CODE_TTL_MS = 90 * 1000;
 const PAIRING_REFRESH_INTERVAL_MS = 30 * 1000;
 
@@ -181,6 +183,26 @@ function normalizeJid(value) {
   return String(value || '').trim();
 }
 
+function getCachedGroupMetadata(jid) {
+  const key = normalizeJid(jid);
+  const cached = groupMetadataCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.updatedAt > GROUP_METADATA_TTL_MS) {
+    groupMetadataCache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function setCachedGroupMetadata(jid, value) {
+  const key = normalizeJid(jid);
+  if (!key || !value) return;
+  groupMetadataCache.set(key, {
+    updatedAt: Date.now(),
+    value
+  });
+}
+
 function canRequestPairingCode() {
   return ['pairing', 'both'].includes(config.whatsappLoginMethod);
 }
@@ -257,7 +279,8 @@ async function connectWhatsApp() {
       auth: state,
       logger: pino({ level: 'silent' }),
       version,
-      browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0']
+      browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0'],
+      cachedGroupMetadata: async (jid) => getCachedGroupMetadata(jid)
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -326,6 +349,28 @@ async function connectWhatsApp() {
       for (const msg of messages || []) {
         if (!msg.message || msg.key.fromMe) continue;
         await handleCommand(msg).catch((error) => console.error('[WhatsApp] Erro em comando:', error.message));
+      }
+    });
+
+    sock.ev.on('groups.update', async (events = []) => {
+      for (const event of events) {
+        if (!event?.id) continue;
+        try {
+          const metadata = await sock.groupMetadata(event.id);
+          setCachedGroupMetadata(event.id, metadata);
+        } catch (error) {
+          console.warn('[WhatsApp] Falha ao atualizar cache do grupo:', event.id, error.message);
+        }
+      }
+    });
+
+    sock.ev.on('group-participants.update', async (event) => {
+      if (!event?.id) return;
+      try {
+        const metadata = await sock.groupMetadata(event.id);
+        setCachedGroupMetadata(event.id, metadata);
+      } catch (error) {
+        console.warn('[WhatsApp] Falha ao atualizar cache de participantes:', event.id, error.message);
       }
     });
 
