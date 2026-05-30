@@ -1,10 +1,10 @@
 node_modules/
 .env
-data/
-storage/
-auth/
-auth_publico/
-sessions/
-baileys_auth/
+/data/
+/storage/
+/auth/
+/auth_publico/
+/sessions/
+/baileys_auth/
 *.log
 .DS_Store
