@@ -5,7 +5,7 @@ services:
     plan: starter
     branch: main
     rootDir: .
-    buildCommand: npm ci && npx playwright install chromium
+    buildCommand: npm ci && npx playwright install --with-deps --only-shell
     startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
