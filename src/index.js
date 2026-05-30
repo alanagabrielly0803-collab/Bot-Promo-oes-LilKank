@@ -67,9 +67,12 @@ app.get('/health', (req, res) => {
 app.get('/qr', (req, res) => {
   const status = getWhatsAppStatus();
   const svg = status.qrSvg || '';
+  const pairingCode = status.pairingCode || '';
   const title = status.connectionState === 'open'
     ? 'WhatsApp conectado'
-    : status.qr
+    : pairingCode
+      ? 'Código de pareamento do WhatsApp'
+      : status.qr
       ? 'Escaneie o QR do WhatsApp'
       : 'Aguardando QR do WhatsApp';
 
@@ -95,6 +98,7 @@ app.get('/qr', (req, res) => {
             <p>Se o QR ainda não apareceu, aguarde o WhatsApp gerar a sessão no Render.</p>
             <p>Status atual: <strong>${status.connectionState}</strong></p>
             <p>Atualizado em: <strong>${status.qrUpdatedAt || 'ainda não'}</strong></p>
+            <p>Modo de login: <strong>${status.loginMethod || 'qr'}</strong></p>
           </div>
         </body>
       </html>`);
@@ -113,10 +117,12 @@ app.get('/qr', (req, res) => {
           body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 24px; }
           .card { max-width: 720px; width: 100%; background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 12px 30px rgba(0,0,0,.35); text-align: center; }
           .qr-wrap { background: #fff; padding: 18px; border-radius: 16px; display: inline-block; }
+          .pair-wrap { margin-top: 16px; background: #0b1120; border: 1px solid #334155; border-radius: 12px; padding: 16px 18px; }
           img { max-width: 100%; height: auto; display: block; }
           .muted { color: #94a3b8; }
           .ok { color: #4ade80; font-weight: 700; }
           code { background: #0b1120; padding: 2px 6px; border-radius: 6px; }
+          .pair-code { font-size: 2rem; letter-spacing: 0.25em; font-weight: 700; color: #f8fafc; word-break: break-word; }
         </style>
       </head>
       <body>
@@ -126,12 +132,18 @@ app.get('/qr', (req, res) => {
           <div class="qr-wrap">
             <img alt="QR Code do WhatsApp" src="data:image/svg+xml;base64,${svgBase64}" />
           </div>
+          ${pairingCode ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
           <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
           <p class="muted">Atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
+          <p class="muted">Modo de login: ${status.loginMethod || 'qr'}</p>
           <p class="muted">Se a página mudar para <code>open</code>, o bot já conectou.</p>
         </div>
       </body>
     </html>`);
+});
+
+app.get('/sync', (req, res) => {
+  res.redirect(302, '/qr');
 });
 
 app.get('/status', (req, res) => {

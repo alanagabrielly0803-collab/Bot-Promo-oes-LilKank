@@ -22,6 +22,10 @@ services:
         value: ./storage/auth_publico
       - key: WHATSAPP_GROUP_ID
         sync: false
+      - key: WHATSAPP_LOGIN_METHOD
+        value: qr
+      - key: WHATSAPP_PAIRING_PHONE
+        sync: false
       - key: SEND_PRODUCT_IMAGE
         value: true
       - key: ALLOW_LINK_ONLY

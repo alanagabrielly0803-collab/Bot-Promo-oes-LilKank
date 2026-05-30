@@ -37,6 +37,8 @@ As variáveis principais já estão no `render.yaml`, mas vale conferir no paine
 
 ```env
 WHATSAPP_GROUP_ID=
+WHATSAPP_LOGIN_METHOD=qr
+WHATSAPP_PAIRING_PHONE=
 WHATSAPP_AUTH_FOLDER=./storage/auth_publico
 DATA_DIR=./storage/data
 AUTO_START_COLLECTOR=true
@@ -71,6 +73,13 @@ https://SEU-SERVICO.onrender.com/qr
 ```
 
 Essa página mostra o QR em imagem e atualiza automaticamente até o WhatsApp conectar.
+Se você configurar `WHATSAPP_LOGIN_METHOD=pairing` ou `both`, ela também mostra o código de pareamento.
+
+## Modos de login
+
+- `qr`: mostra QR na página `/qr`
+- `pairing`: mostra o código de pareamento na página `/qr`
+- `both`: tenta gerar código de pareamento e também mantém o QR visível
 
 ## Git
 

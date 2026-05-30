@@ -21,11 +21,54 @@ let currentQr = {
   svg: '',
   updatedAt: null
 };
+let currentPairingCode = {
+  value: '',
+  updatedAt: null
+};
 let connectionState = 'idle';
+let pairingRequested = false;
 
 function setCurrentQr(value) {
   currentQr.value = value || '';
   currentQr.updatedAt = new Date().toISOString();
+}
+
+function setCurrentPairingCode(value) {
+  currentPairingCode.value = value || '';
+  currentPairingCode.updatedAt = value ? new Date().toISOString() : null;
+}
+
+function normalizePhoneNumber(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function canRequestPairingCode() {
+  return ['pairing', 'both'].includes(config.whatsappLoginMethod);
+}
+
+async function maybeRequestPairingCode(reason = 'manual') {
+  if (!sock) return;
+  if (!canRequestPairingCode()) return;
+  if (pairingRequested || currentPairingCode.value) return;
+  if (sock.authState?.creds?.registered) return;
+
+  const phoneNumber = normalizePhoneNumber(config.whatsappPairingPhone);
+  if (!phoneNumber) {
+    console.warn('[WhatsApp] WHATSAPP_PAIRING_PHONE não configurado. Use apenas QR ou preencha o telefone para o código.');
+    return;
+  }
+
+  pairingRequested = true;
+  try {
+    console.log(`[WhatsApp] Solicitando código de pareamento (${reason})...`);
+    const code = await sock.requestPairingCode(phoneNumber);
+    setCurrentPairingCode(code);
+    console.log(`[WhatsApp] Código de pareamento: ${code}`);
+  } catch (error) {
+    pairingRequested = false;
+    setCurrentPairingCode('');
+    console.error('[WhatsApp] Falha ao solicitar código de pareamento:', error.message);
+  }
 }
 
 async function generateQrSvg(value) {
@@ -66,14 +109,24 @@ async function connectWhatsApp() {
         console.error('[WhatsApp] Falha ao gerar QR SVG:', error.message);
         currentQr.svg = '';
       }
-      console.log('[WhatsApp] Escaneie o QR Code abaixo:');
-      qrcode.generate(qr, { small: true });
+      if (config.whatsappLoginMethod !== 'pairing') {
+        console.log('[WhatsApp] Escaneie o QR Code abaixo:');
+        qrcode.generate(qr, { small: true });
+      }
+      if (canRequestPairingCode()) {
+        setTimeout(() => {
+          maybeRequestPairingCode('qr-event').catch((error) => {
+            console.error('[WhatsApp] Erro ao iniciar pareamento:', error.message);
+          });
+        }, 2500);
+      }
     }
 
     if (connection === 'open') {
       connectionState = 'open';
       setCurrentQr('');
       currentQr.svg = '';
+      setCurrentPairingCode('');
       console.log('[WhatsApp] Conectado com sucesso.');
     }
 
@@ -86,6 +139,8 @@ async function connectWhatsApp() {
         console.error('[WhatsApp] Erro de desconexão:', lastDisconnect.error.message || lastDisconnect.error);
       }
       if (shouldReconnect) {
+        pairingRequested = false;
+        setCurrentPairingCode('');
         setTimeout(() => {
           connectWhatsApp().catch((error) => {
             console.error('[WhatsApp] Falha ao reconectar:', error.message);
@@ -110,7 +165,10 @@ function getWhatsAppStatus() {
     connectionState,
     qr: currentQr.value,
     qrSvg: currentQr.svg,
-    qrUpdatedAt: currentQr.updatedAt
+    qrUpdatedAt: currentQr.updatedAt,
+    pairingCode: currentPairingCode.value,
+    pairingCodeUpdatedAt: currentPairingCode.updatedAt,
+    loginMethod: config.whatsappLoginMethod
   };
 }
 

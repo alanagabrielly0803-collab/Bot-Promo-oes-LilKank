@@ -21,6 +21,8 @@ const config = {
   port: number(process.env.PORT, 10000),
   whatsappGroupId: process.env.WHATSAPP_GROUP_ID || '',
   whatsappAuthFolder: process.env.WHATSAPP_AUTH_FOLDER || './storage/auth_publico',
+  whatsappLoginMethod: String(process.env.WHATSAPP_LOGIN_METHOD || 'qr').toLowerCase(),
+  whatsappPairingPhone: String(process.env.WHATSAPP_PAIRING_PHONE || '').trim(),
   sendProductImage: bool(process.env.SEND_PRODUCT_IMAGE, true),
   allowLinkOnly: bool(process.env.ALLOW_LINK_ONLY, true),
   requireVerifiedImage: bool(process.env.REQUIRE_VERIFIED_IMAGE, false),
