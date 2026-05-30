@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
+const fs = require('fs/promises');
+const path = require('path');
 const config = require('./config');
 const { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus, waitForWhatsAppReady } = require('./publisher/whatsapp');
 const { runCollector, runCategoryCycle } = require('./collectorRunner');
@@ -64,6 +66,81 @@ function clampLimit(value, fallback = 1, max = 50) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(Math.floor(n), max);
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getDirectoryDiagnostics(label, configuredPath) {
+  const resolvedPath = path.resolve(configuredPath);
+  const diagnostics = {
+    label,
+    configuredPath,
+    resolvedPath,
+    exists: false,
+    readable: false,
+    topLevelFiles: 0,
+    topLevelDirectories: 0,
+    recursiveFiles: 0,
+    recursiveDirectories: 0,
+    hasCredsJson: false,
+    looksLikeBaileysSession: false,
+    truncated: false,
+    error: null
+  };
+
+  try {
+    const stat = await fs.stat(resolvedPath);
+    diagnostics.exists = true;
+
+    if (!stat.isDirectory()) {
+      diagnostics.error = 'path_is_not_directory';
+      return diagnostics;
+    }
+
+    const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
+    diagnostics.readable = true;
+    diagnostics.topLevelFiles = entries.filter((entry) => entry.isFile()).length;
+    diagnostics.topLevelDirectories = entries.filter((entry) => entry.isDirectory()).length;
+    diagnostics.hasCredsJson = await pathExists(path.join(resolvedPath, 'creds.json'));
+
+    const stack = [resolvedPath];
+    const maxEntries = 2000;
+    let visited = 0;
+
+    while (stack.length) {
+      const current = stack.pop();
+      const currentEntries = await fs.readdir(current, { withFileTypes: true });
+
+      for (const entry of currentEntries) {
+        visited += 1;
+        if (visited > maxEntries) {
+          diagnostics.truncated = true;
+          stack.length = 0;
+          break;
+        }
+
+        if (entry.isDirectory()) {
+          diagnostics.recursiveDirectories += 1;
+          stack.push(path.join(current, entry.name));
+        } else if (entry.isFile()) {
+          diagnostics.recursiveFiles += 1;
+        }
+      }
+    }
+
+    diagnostics.looksLikeBaileysSession = diagnostics.hasCredsJson && diagnostics.recursiveFiles >= 2;
+    return diagnostics;
+  } catch (error) {
+    diagnostics.error = error.code || error.message;
+    return diagnostics;
+  }
 }
 
 async function runCollectAndPublish(limit = 1) {
@@ -215,6 +292,24 @@ app.get('/status', (req, res) => {
 
 app.use('/api', requireApiKey);
 
+app.get('/api/storage-status', asyncRoute(async (req, res) => {
+  const [authFolder, dataDir] = await Promise.all([
+    getDirectoryDiagnostics('whatsappAuthFolder', config.whatsappAuthFolder),
+    getDirectoryDiagnostics('dataDir', config.dataDir)
+  ]);
+
+  res.json({
+    ok: true,
+    message: 'Diagnóstico de armazenamento. Nenhum conteúdo de credencial é exibido.',
+    storage: {
+      authFolder,
+      dataDir
+    },
+    whatsapp: getWhatsAppStatus(),
+    stats: queueStats()
+  });
+}));
+
 app.post('/api/offers', (req, res) => {
   const body = req.body || {};
   const offer = {
@@ -311,7 +406,7 @@ app.use((error, req, res, next) => {
 
 app.listen(config.port, () => {
   console.log(`[HTTP] Servidor rodando na porta ${config.port}.`);
-  console.log('[HTTP] Rotas: /, /health, /qr, /status, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
+  console.log('[HTTP] Rotas: /, /health, /qr, /status, GET /api/storage-status, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
 });
 
 async function bootstrap() {
