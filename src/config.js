@@ -19,7 +19,7 @@ function list(value) {
 
 const config = {
   port: number(process.env.PORT, 10000),
-  whatsappGroupId: process.env.WHATSAPP_GROUP_ID || '',
+  whatsappGroupId: String(process.env.WHATSAPP_GROUP_ID || '').trim(),
   whatsappAuthFolder: process.env.WHATSAPP_AUTH_FOLDER || './storage/auth_publico',
   whatsappLoginMethod: String(process.env.WHATSAPP_LOGIN_METHOD || 'qr').toLowerCase(),
   whatsappPairingPhone: String(process.env.WHATSAPP_PAIRING_PHONE || '').trim(),

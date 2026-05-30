@@ -67,6 +67,7 @@ function enqueueOffers(offers) {
   let added = 0;
 
   for (const raw of offers) {
+    if (!raw || typeof raw !== 'object') continue;
     const offer = { ...raw, id: offerId(raw), status: 'pending', createdAt: raw.createdAt || new Date().toISOString() };
     if (!offer.url || known.has(offer.id)) continue;
     queue.push(offer);
@@ -80,7 +81,7 @@ function enqueueOffers(offers) {
 
 function getPendingOffers(limit = 1, sourceUrl = null) {
   return loadQueue()
-    .filter((item) => item.status === 'pending' && (!sourceUrl || item.sourceUrl === sourceUrl))
+    .filter((item) => item && item.status === 'pending' && (!sourceUrl || item.sourceUrl === sourceUrl))
     .slice(0, limit);
 }
 

@@ -109,6 +109,10 @@ function normalizePhoneNumber(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function normalizeJid(value) {
+  return String(value || '').trim();
+}
+
 function canRequestPairingCode() {
   return ['pairing', 'both'].includes(config.whatsappLoginMethod);
 }
@@ -342,6 +346,11 @@ async function handleCommand(msg) {
 }
 
 async function sendOffer(targetJid, offer) {
+  const normalizedTargetJid = normalizeJid(targetJid);
+  if (!normalizedTargetJid) {
+    return { mode: 'error', reason: 'missing_group_id' };
+  }
+
   const caption = buildOfferMessage(offer);
 
   if (config.requireVerifiedImage && !offer.imageVerified && !config.allowUntrustedImageTesting) {
@@ -351,12 +360,17 @@ async function sendOffer(targetJid, offer) {
   if (config.sendProductImage && (offer.imageBuffer || offer.imageUrl)) {
     try {
       if (offer.imageBuffer) {
-        await sock.sendMessage(targetJid, {
+        await sock.sendMessage(normalizedTargetJid, {
           image: offer.imageBuffer,
-          caption
+          caption,
+          mimetype: offer.imageContentType || 'image/png'
         });
       } else {
-        const imageResponse = await axios.get(offer.imageUrl, {
+        const imageUrl = String(offer.imageUrl || '').trim();
+        if (!imageUrl) {
+          throw new Error('missing_image_url');
+        }
+        const imageResponse = await axios.get(imageUrl, {
           responseType: 'arraybuffer',
           timeout: 15000,
           headers: {
@@ -370,9 +384,10 @@ async function sendOffer(targetJid, offer) {
           throw new Error(`download_image_http_${imageResponse.status}`);
         }
 
-        await sock.sendMessage(targetJid, {
+        await sock.sendMessage(normalizedTargetJid, {
           image: Buffer.from(imageResponse.data),
-          caption
+          caption,
+          mimetype: imageResponse.headers?.['content-type'] || 'image/jpeg'
         });
       }
       return { mode: 'image' };
@@ -388,7 +403,7 @@ async function sendOffer(targetJid, offer) {
     return { mode: 'skipped_no_verified_image', reason: 'missing_verified_image' };
   }
 
-  await sock.sendMessage(targetJid, { text: caption });
+  await sock.sendMessage(normalizedTargetJid, { text: caption });
   return { mode: 'text' };
 }
 
@@ -434,6 +449,7 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
       const result = await sendOffer(targetJid, normalizedOffer);
       const persistedOffer = { ...normalizedOffer };
       delete persistedOffer.imageBuffer;
+      delete persistedOffer.imageContentType;
       if (result.mode === 'skipped_no_verified_image') {
         markSkipped(persistedOffer, result);
         console.log(`[Publisher] Oferta ignorada por falta de imagem verificada: ${normalizedOffer.title}`);
@@ -444,7 +460,7 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
       sent += 1;
       console.log(`[Publisher] Oferta enviada: ${normalizedOffer.title}`);
     } catch (error) {
-      console.error('[Publisher] Falha ao enviar oferta:', error.message);
+      console.error('[Publisher] Falha ao enviar oferta:', error.stack || error.message);
     }
   }
 
