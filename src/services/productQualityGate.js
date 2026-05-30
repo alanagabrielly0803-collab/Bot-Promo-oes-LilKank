@@ -329,6 +329,22 @@ function scoreImageCandidate(candidate, title) {
   return Math.max(0, Math.min(100, score));
 }
 
+function getTitleTokens(title) {
+  return cleanText(title)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .split(/\s+/)
+    .map((t) => t.replace(/[^a-z0-9]/gi, ''))
+    .filter((t) => t.length >= 4);
+}
+
+function countTitleMatches(candidate, titleTokens) {
+  if (!titleTokens.length) return 0;
+  const haystack = cleanText(`${candidate.url || ''} ${candidate.alt || ''}`).toLowerCase();
+  return titleTokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0);
+}
+
 function extractImageCandidatesFromHtml($, pageUrl, products) {
   const candidates = [];
 
@@ -438,8 +454,18 @@ async function validateImageUrl(imageUrl) {
 }
 
 async function chooseBestImage(candidates, title, allowPlaywright = true) {
+  const titleTokens = getTitleTokens(title);
   const scored = candidates
-    .map((candidate) => ({ ...candidate, confidence: scoreImageCandidate(candidate, title) }))
+    .map((candidate) => ({
+      ...candidate,
+      titleMatches: countTitleMatches(candidate, titleTokens),
+      confidence: scoreImageCandidate(candidate, title)
+    }))
+    .filter((candidate) => {
+      if (!titleTokens.length) return true;
+      if (candidate.titleMatches > 0) return true;
+      return ['jsonld_product', 'og_image_secure_url', 'twitter_image', 'twitter_image_src', 'playwright_og_image_secure_url', 'playwright_twitter_image', 'playwright_twitter_image_src'].includes(candidate.source);
+    })
     .filter((candidate) => candidate.confidence >= 45)
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 12);
