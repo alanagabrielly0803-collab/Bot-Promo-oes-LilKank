@@ -68,15 +68,18 @@ app.get('/qr', (req, res) => {
   const status = getWhatsAppStatus();
   const svg = status.qrSvg || '';
   const pairingCode = status.pairingCode || '';
+  const loginMethod = status.loginMethod || 'qr';
+  const showQr = loginMethod !== 'pairing' && Boolean(svg);
+  const showPairing = Boolean(pairingCode) || loginMethod === 'pairing';
   const title = status.connectionState === 'open'
     ? 'WhatsApp conectado'
-    : pairingCode
+    : showPairing
       ? 'Código de pareamento do WhatsApp'
-      : status.qr
+      : showQr
       ? 'Escaneie o QR do WhatsApp'
       : 'Aguardando QR do WhatsApp';
 
-  if (!svg) {
+  if (!showQr && !showPairing) {
     res.type('html').send(`<!doctype html>
       <html lang="pt-BR">
         <head>
@@ -89,6 +92,8 @@ app.get('/qr', (req, res) => {
             .card { max-width: 640px; width: 100%; background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
             code, pre { white-space: pre-wrap; word-break: break-word; }
             .muted { color: #94a3b8; }
+            .pair-wrap { margin-top: 16px; background: #0b1120; border: 1px solid #334155; border-radius: 12px; padding: 16px 18px; }
+            .pair-code { font-size: 2rem; letter-spacing: 0.25em; font-weight: 700; color: #f8fafc; word-break: break-word; }
           </style>
         </head>
         <body>
@@ -99,6 +104,7 @@ app.get('/qr', (req, res) => {
             <p>Status atual: <strong>${status.connectionState}</strong></p>
             <p>Atualizado em: <strong>${status.qrUpdatedAt || 'ainda não'}</strong></p>
             <p>Modo de login: <strong>${status.loginMethod || 'qr'}</strong></p>
+            ${pairingCode ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
           </div>
         </body>
       </html>`);
@@ -128,11 +134,9 @@ app.get('/qr', (req, res) => {
       <body>
         <div class="card">
           <h1>${title}</h1>
-          <p class="muted">Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.</p>
-          <div class="qr-wrap">
-            <img alt="QR Code do WhatsApp" src="data:image/svg+xml;base64,${svgBase64}" />
-          </div>
-          ${pairingCode ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
+          <p class="muted">${showPairing ? 'Digite o código de pareamento no WhatsApp do celular.' : 'Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.'}</p>
+          ${showQr ? `<div class="qr-wrap"><img alt="QR Code do WhatsApp" src="data:image/svg+xml;base64,${svgBase64}" /></div>` : ''}
+          ${showPairing ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode || 'Aguardando código...'}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
           <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
           <p class="muted">Atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
           <p class="muted">Modo de login: ${status.loginMethod || 'qr'}</p>

@@ -23,7 +23,7 @@ services:
       - key: WHATSAPP_GROUP_ID
         sync: false
       - key: WHATSAPP_LOGIN_METHOD
-        value: both
+        value: pairing
       - key: WHATSAPP_PAIRING_PHONE
         sync: false
       - key: SEND_PRODUCT_IMAGE

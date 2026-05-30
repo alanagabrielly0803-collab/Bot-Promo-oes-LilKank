@@ -28,7 +28,7 @@ No `render.yaml`, isso já foi configurado com um disco montado em:
 1. Suba este diretório para um repositório Git.
 2. Conecte esse repositório ao Render.
 3. Garanta que o serviço use o `render.yaml`.
-4. No primeiro boot, confira os logs do Render e escaneie o QR Code do WhatsApp.
+4. No primeiro boot, confira os logs do Render e use o código de pareamento do WhatsApp.
 5. Depois que a sessão ficar salva no disco, o bot passa a reconectar sem QR novo a cada deploy.
 
 ## Variáveis importantes no Render
@@ -37,7 +37,7 @@ As variáveis principais já estão no `render.yaml`, mas vale conferir no paine
 
 ```env
 WHATSAPP_GROUP_ID=
-WHATSAPP_LOGIN_METHOD=both
+WHATSAPP_LOGIN_METHOD=pairing
 WHATSAPP_PAIRING_PHONE=
 WHATSAPP_AUTH_FOLDER=./storage/auth_publico
 DATA_DIR=./storage/data
@@ -64,16 +64,18 @@ https://SEU-SERVICO.onrender.com/health
 
 O endpoint retorna `200` quando o servidor HTTP está no ar.
 
-## QR do WhatsApp no Render
+## Login do WhatsApp no Render
 
-Se o QR não ficar legível no log, abra:
+Para evitar QR deformado no log do Render, o modo recomendado é `pairing`.
+
+Abra:
 
 ```txt
 https://SEU-SERVICO.onrender.com/qr
 ```
 
-Essa página mostra o QR em imagem e atualiza automaticamente até o WhatsApp conectar.
-Se você configurar `WHATSAPP_LOGIN_METHOD=pairing` ou `both`, ela também mostra o código de pareamento.
+Essa página mostra o código de pareamento e atualiza automaticamente até o WhatsApp conectar.
+Se você mudar `WHATSAPP_LOGIN_METHOD` para `both`, ela também tenta exibir QR.
 
 ## Modos de login
 
@@ -81,7 +83,7 @@ Se você configurar `WHATSAPP_LOGIN_METHOD=pairing` ou `both`, ela também mostr
 - `pairing`: mostra só o código de pareamento na página `/qr`
 - `both`: mostra QR e tenta gerar o código de pareamento ao mesmo tempo
 
-Se você quiser usar `both`, preencha também `WHATSAPP_PAIRING_PHONE` com o número no formato internacional, só dígitos.
+Se você quiser usar `pairing` ou `both`, preencha `WHATSAPP_PAIRING_PHONE` com o número no formato internacional, só dígitos.
 
 ## Git
 
