@@ -33,6 +33,21 @@ let pairingRefreshTimer = null;
 const PAIRING_CODE_TTL_MS = 90 * 1000;
 const PAIRING_REFRESH_INTERVAL_MS = 30 * 1000;
 
+function getPublicBaseUrl() {
+  return String(
+    process.env.RENDER_EXTERNAL_URL ||
+    process.env.PUBLIC_URL ||
+    process.env.SERVICE_URL ||
+    process.env.BASE_URL ||
+    ''
+  ).replace(/\/+$/, '');
+}
+
+function getPairingPageUrl() {
+  const baseUrl = getPublicBaseUrl();
+  return baseUrl ? `${baseUrl}/qr` : '';
+}
+
 async function resetAuthFolderIfNeeded() {
   if (!config.resetWhatsAppAuthOnStart) return;
 
@@ -116,6 +131,10 @@ async function maybeRequestPairingCode(reason = 'manual') {
     const code = await sock.requestPairingCode(phoneNumber);
     setCurrentPairingCode(code);
     console.log(`[WhatsApp] Código de pareamento: ${code}`);
+    const pairingPageUrl = getPairingPageUrl();
+    if (pairingPageUrl) {
+      console.log(`[WhatsApp] Abra a página de pareamento em: ${pairingPageUrl}`);
+    }
   } catch (error) {
     pairingRequested = false;
     setCurrentPairingCode('');
@@ -161,6 +180,10 @@ async function connectWhatsApp() {
       } catch (error) {
         console.error('[WhatsApp] Falha ao gerar QR SVG:', error.message);
         currentQr.svg = '';
+      }
+      const pairingPageUrl = getPairingPageUrl();
+      if (pairingPageUrl) {
+        console.log(`[WhatsApp] Abra o login do bot em: ${pairingPageUrl}`);
       }
       if (config.whatsappLoginMethod !== 'pairing') {
         console.log('[WhatsApp] Escaneie o QR Code abaixo:');
