@@ -189,13 +189,20 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/qr', (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+    'Surrogate-Control': 'no-store'
+  });
+
   const status = getWhatsAppStatus();
   const svg = status.qrSvg || '';
   const png = status.qrPng || '';
   const pairingCode = status.pairingCode || '';
   const loginMethod = status.loginMethod || 'qr';
   const showQr = Boolean(png || svg);
-  const showPairing = Boolean(pairingCode) || loginMethod === 'pairing';
+  const showPairing = Boolean(pairingCode) || ['pairing', 'both'].includes(loginMethod);
   const title = status.connectionState === 'open'
     ? 'WhatsApp conectado'
     : showQr
@@ -203,14 +210,14 @@ app.get('/qr', (req, res) => {
       : showPairing
         ? 'Código de pareamento do WhatsApp'
       : 'Aguardando QR do WhatsApp';
-  const refreshSeconds = showQr ? 30 : 5;
+  const refreshSeconds = showQr ? 5 : 3;
 
   if (!showQr && !showPairing) {
     res.type('html').send(`<!doctype html>
       <html lang="pt-BR">
         <head>
           <meta charset="utf-8" />
-          <meta http-equiv="refresh" content="5" />
+          <meta http-equiv="refresh" content="3" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <title>${title}</title>
           <style>
@@ -225,8 +232,8 @@ app.get('/qr', (req, res) => {
         <body>
           <div class="card">
             <h1>${title}</h1>
-            <p class="muted">Esta página atualiza automaticamente a cada 5 segundos.</p>
-            <p>Se o QR ainda não apareceu, aguarde o WhatsApp gerar a sessão no Render.</p>
+            <p class="muted">Esta página atualiza automaticamente a cada 3 segundos.</p>
+            <p>Se o QR ainda não apareceu, aguarde o WhatsApp gerar uma sessão nova no Render.</p>
             <p>Status atual: <strong>${status.connectionState}</strong></p>
             <p>Atualizado em: <strong>${status.qrUpdatedAt || 'ainda não'}</strong></p>
             <p>Modo de login: <strong>${status.loginMethod || 'qr'}</strong></p>
@@ -253,6 +260,7 @@ app.get('/qr', (req, res) => {
           img { max-width: 100%; height: auto; display: block; }
           .muted { color: #94a3b8; }
           .ok { color: #4ade80; font-weight: 700; }
+          .warn { color: #fbbf24; font-weight: 700; }
           code { background: #0b1120; padding: 2px 6px; border-radius: 6px; }
           .pair-code { font-size: 2rem; letter-spacing: 0.25em; font-weight: 700; color: #f8fafc; word-break: break-word; }
         </style>
@@ -260,13 +268,14 @@ app.get('/qr', (req, res) => {
       <body>
         <div class="card">
           <h1>${title}</h1>
-          <p class="muted">${showQr ? 'Abra este endereço no navegador e escaneie o QR com a câmera do WhatsApp.' : 'Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.'}</p>
+          <p class="muted">Abra o WhatsApp em <code>Aparelhos conectados</code> e escaneie o QR. Esta página atualiza a cada <strong>${refreshSeconds}s</strong> para evitar QR expirado.</p>
           ${showQr ? `<div class="qr-wrap"><img alt="QR Code do WhatsApp" src="${qrSrc}" width="360" height="360" /></div>` : ''}
           ${!showQr && showPairing ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode || 'Aguardando código...'}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
+          ${pairingCode ? `<div class="pair-wrap"><div class="muted">Código de pareamento alternativo</div><div class="pair-code">${pairingCode}</div><div class="muted">Use se o QR continuar inválido.</div></div>` : ''}
           <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
-          <p class="muted">Atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
+          <p class="muted">QR gerado/atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
           <p class="muted">Modo de login: ${status.loginMethod || 'qr'}</p>
-          <p class="muted">Se a página mudar para <code>open</code>, o bot já conectou.</p>
+          <p class="warn">Se o WhatsApp disser inválido, aguarde a página atualizar e escaneie o QR novo.</p>
         </div>
       </body>
     </html>`);
