@@ -38,6 +38,8 @@ const config = {
   imageRequireValidHttp: bool(process.env.IMAGE_REQUIRE_VALID_HTTP, true),
   playwrightImageFallback: bool(process.env.PLAYWRIGHT_IMAGE_FALLBACK, true),
   playwrightTimeoutMs: number(process.env.PLAYWRIGHT_TIMEOUT_MS, 30000),
+  imageReviewBatchSize: number(process.env.IMAGE_REVIEW_BATCH_SIZE, 20),
+  imageReviewMaxAttempts: number(process.env.IMAGE_REVIEW_MAX_ATTEMPTS, 3),
   publishOnlyValidated: bool(process.env.PUBLISH_ONLY_VALIDATED, true),
   autoStartPublisher: bool(process.env.AUTO_START_PUBLISHER, false),
   autoStartCollector: bool(process.env.AUTO_START_COLLECTOR, false),
