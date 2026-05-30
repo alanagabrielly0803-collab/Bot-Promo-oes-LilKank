@@ -21,7 +21,7 @@ services:
       - key: WHATSAPP_AUTH_FOLDER
         value: ./storage/auth_publico
       - key: WHATSAPP_GROUP_ID
-        sync: false
+        value: 120363426876382276@g.us
       - key: WHATSAPP_LOGIN_METHOD
         value: qr
       - key: WHATSAPP_PAIRING_PHONE
@@ -35,7 +35,7 @@ services:
       - key: REQUIRE_VERIFIED_IMAGE
         value: true
       - key: ALLOW_UNTRUSTED_IMAGE_TESTING
-        value: false
+        value: true
       - key: ALLOW_PAGE_IMAGE_AS_VERIFIED
         value: true
       - key: IMAGE_EXTRACTION_MODE
@@ -51,7 +51,7 @@ services:
       - key: IMAGE_REQUIRE_VALID_HTTP
         value: true
       - key: PLAYWRIGHT_IMAGE_FALLBACK
-        value: false
+        value: true
       - key: PLAYWRIGHT_TIMEOUT_MS
         value: 30000
       - key: PUBLISH_ONLY_VALIDATED
@@ -81,9 +81,9 @@ services:
       - key: RSS_SOURCE_URLS
         value: ""
       - key: OFFER_KEYWORDS
-        sync: false
+        value: ""
       - key: BLOCK_KEYWORDS
-        sync: false
+        value: informatico,informatica,computador,pc,notebook,desktop,monitor,teclado,mouse,placa de video,placa mae,processador,ssd,hd,memoria ram,roteador,impressora,camera,smartphone,celular,iphone,android,automotivo,carro,moto,veiculo,automovel,pneu,oleo,farol,oficina,peca automotiva
       - key: MIN_PRICE
         value: 1
       - key: MAX_PRICE
