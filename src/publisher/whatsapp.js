@@ -29,6 +29,9 @@ let currentPairingCode = {
 };
 let connectionState = 'idle';
 let pairingRequested = false;
+let pairingRefreshTimer = null;
+const PAIRING_CODE_TTL_MS = 90 * 1000;
+const PAIRING_REFRESH_INTERVAL_MS = 30 * 1000;
 
 async function resetAuthFolderIfNeeded() {
   if (!config.resetWhatsAppAuthOnStart) return;
@@ -53,6 +56,39 @@ function setCurrentPairingCode(value) {
   currentPairingCode.updatedAt = value ? new Date().toISOString() : null;
 }
 
+function getPairingCodeAgeMs() {
+  if (!currentPairingCode.updatedAt) return null;
+  const age = Date.now() - new Date(currentPairingCode.updatedAt).getTime();
+  return Number.isFinite(age) ? age : null;
+}
+
+function isPairingCodeExpired() {
+  const age = getPairingCodeAgeMs();
+  return age !== null && age > PAIRING_CODE_TTL_MS;
+}
+
+function clearPairingRefreshTimer() {
+  if (pairingRefreshTimer) {
+    clearInterval(pairingRefreshTimer);
+    pairingRefreshTimer = null;
+  }
+}
+
+function startPairingRefreshTimer() {
+  if (pairingRefreshTimer || !canRequestPairingCode()) return;
+  pairingRefreshTimer = setInterval(() => {
+    if (sock?.authState?.creds?.registered) return;
+    if (!currentPairingCode.value || isPairingCodeExpired()) {
+      pairingRequested = false;
+      setCurrentPairingCode('');
+      maybeRequestPairingCode('refresh').catch((error) => {
+        console.error('[WhatsApp] Erro ao renovar código de pareamento:', error.message);
+      });
+    }
+  }, PAIRING_REFRESH_INTERVAL_MS);
+  pairingRefreshTimer.unref?.();
+}
+
 function normalizePhoneNumber(value) {
   return String(value || '').replace(/\D/g, '');
 }
@@ -64,8 +100,9 @@ function canRequestPairingCode() {
 async function maybeRequestPairingCode(reason = 'manual') {
   if (!sock) return;
   if (!canRequestPairingCode()) return;
-  if (pairingRequested || currentPairingCode.value) return;
   if (sock.authState?.creds?.registered) return;
+  if (pairingRequested) return;
+  if (currentPairingCode.value && !isPairingCodeExpired()) return;
 
   const phoneNumber = normalizePhoneNumber(config.whatsappPairingPhone);
   if (!phoneNumber) {
@@ -130,6 +167,7 @@ async function connectWhatsApp() {
         qrcode.generate(qr, { small: true });
       }
       if (canRequestPairingCode()) {
+        startPairingRefreshTimer();
         setTimeout(() => {
           maybeRequestPairingCode('qr-event').catch((error) => {
             console.error('[WhatsApp] Erro ao iniciar pareamento:', error.message);
@@ -143,6 +181,7 @@ async function connectWhatsApp() {
       setCurrentQr('');
       currentQr.svg = '';
       setCurrentPairingCode('');
+      clearPairingRefreshTimer();
       console.log('[WhatsApp] Conectado com sucesso.');
     }
 
@@ -157,6 +196,7 @@ async function connectWhatsApp() {
       if (shouldReconnect) {
         pairingRequested = false;
         setCurrentPairingCode('');
+        clearPairingRefreshTimer();
         setTimeout(() => {
           connectWhatsApp().catch((error) => {
             console.error('[WhatsApp] Falha ao reconectar:', error.message);
