@@ -5,7 +5,7 @@ services:
     plan: starter
     branch: main
     rootDir: .
-    buildCommand: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
+    buildCommand: npm ci && npx playwright install chromium
     startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
