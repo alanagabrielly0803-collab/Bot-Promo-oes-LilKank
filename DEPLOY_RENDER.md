@@ -37,7 +37,7 @@ As variáveis principais já estão no `render.yaml`, mas vale conferir no paine
 
 ```env
 WHATSAPP_GROUP_ID=
-WHATSAPP_LOGIN_METHOD=qr
+WHATSAPP_LOGIN_METHOD=both
 WHATSAPP_PAIRING_PHONE=
 WHATSAPP_AUTH_FOLDER=./storage/auth_publico
 DATA_DIR=./storage/data
@@ -77,9 +77,11 @@ Se você configurar `WHATSAPP_LOGIN_METHOD=pairing` ou `both`, ela também mostr
 
 ## Modos de login
 
-- `qr`: mostra QR na página `/qr`
-- `pairing`: mostra o código de pareamento na página `/qr`
-- `both`: tenta gerar código de pareamento e também mantém o QR visível
+- `qr`: mostra só QR na página `/qr`
+- `pairing`: mostra só o código de pareamento na página `/qr`
+- `both`: mostra QR e tenta gerar o código de pareamento ao mesmo tempo
+
+Se você quiser usar `both`, preencha também `WHATSAPP_PAIRING_PHONE` com o número no formato internacional, só dígitos.
 
 ## Git
 
