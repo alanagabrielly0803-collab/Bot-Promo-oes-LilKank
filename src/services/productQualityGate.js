@@ -778,9 +778,9 @@ async function enrichAndValidateOffer(rawCandidate) {
   }
 
   const finalImageUrl = imageResult.image;
-  const finalImageSource = screenshotResult?.source || imageResult.source;
-  const finalImageConfidence = screenshotResult?.confidence || imageResult.confidence;
-  const finalImageValidation = screenshotResult?.validation || imageResult.validation || null;
+  const finalImageSource = imageResult.source;
+  const finalImageConfidence = imageResult.confidence;
+  const finalImageValidation = imageResult.validation || screenshotResult?.validation || null;
 
   return {
     ok: true,
@@ -791,7 +791,7 @@ async function enrichAndValidateOffer(rawCandidate) {
       price: finalPriceValue,
       priceText,
       imageUrl: finalImageUrl,
-      imageBuffer: screenshotResult?.image || null,
+      imageBuffer: null,
       imageContentType: finalImageValidation?.contentType || 'image/jpeg',
       imageVerified: true,
       imageSource: finalImageSource,
@@ -803,6 +803,8 @@ async function enrichAndValidateOffer(rawCandidate) {
         priceConfidence: priceResult.confidence,
         imageSource: finalImageSource,
         imageConfidence: finalImageConfidence,
+        imageScreenshotSource: screenshotResult?.source || '',
+        imageScreenshotConfidence: screenshotResult?.confidence || 0,
         imageValidation: finalImageValidation
       },
       verified: {
