@@ -488,13 +488,23 @@ let browserPromise = null;
 
 async function getBrowser() {
   if (!browserPromise) {
-    browserPromise = chromium.launch({ headless: true });
+    browserPromise = chromium.launch({ headless: true }).catch((error) => {
+      browserPromise = null;
+      console.warn('[QualityGate] Playwright indisponível neste ambiente:', error.message);
+      return null;
+    });
   }
   return browserPromise;
 }
 
 async function extractWithPlaywright(url, title) {
   const browser = await getBrowser();
+  if (!browser) {
+    return {
+      ok: false,
+      reason: 'playwright_unavailable'
+    };
+  }
   const pageUrl = url;
   const page = await browser.newPage({
     userAgent: USER_AGENT,
@@ -594,6 +604,9 @@ async function extractCardScreenshot(rawCandidate) {
   if (!sourceUrl || !productUrl) return null;
 
   const browser = await getBrowser();
+  if (!browser) {
+    return null;
+  }
   const page = await browser.newPage({
     userAgent: USER_AGENT,
     viewport: { width: 1440, height: 1600 }
