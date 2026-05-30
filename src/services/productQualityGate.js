@@ -701,6 +701,14 @@ async function enrichAndValidateOffer(rawCandidate) {
     imageResult = await extractWithPlaywright(finalUrl, title);
   }
 
+  const primaryPriceValue = parsePriceValue(priceResult.price);
+  const fallbackPriceValue = parsePriceValue(rawCandidate?.priceText || rawCandidate?.price);
+  const finalPriceValue = primaryPriceValue ?? fallbackPriceValue;
+
+  if (finalPriceValue == null) {
+    return reject('missing_price', { title, pageUrl: finalUrl });
+  }
+
   if (!imageResult.ok) {
     if (config.allowUntrustedImageTesting) {
       const fallbackImageUrl =
@@ -745,14 +753,6 @@ async function enrichAndValidateOffer(rawCandidate) {
       };
     }
     return reject('no_trusted_image', { title, pageUrl: finalUrl, imageResult });
-  }
-
-  const primaryPriceValue = parsePriceValue(priceResult.price);
-  const fallbackPriceValue = parsePriceValue(rawCandidate?.priceText || rawCandidate?.price);
-  const finalPriceValue = primaryPriceValue ?? fallbackPriceValue;
-
-  if (finalPriceValue == null) {
-    return reject('missing_price', { title, pageUrl: finalUrl });
   }
 
   const rawPriceSource = String(rawCandidate?.priceSource || '');
