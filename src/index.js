@@ -9,6 +9,7 @@ const { queueStats, enqueueOffers } = require('./queue/offerQueue');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+let schedulersStarted = false;
 
 function buildTestOffer() {
   const nonce = Date.now();
@@ -31,6 +32,32 @@ async function runCollectAndPublish(limit = 1) {
 async function runCategoryCollectAndPublish(limit = 5) {
   const collectResult = await runCategoryCycle(limit);
   return { collectResult, publishResult: { sent: collectResult.sent || 0 } };
+}
+
+async function startSchedulers() {
+  if (schedulersStarted) return;
+  schedulersStarted = true;
+
+  if (config.seedTestOfferOnStart) {
+    enqueueOffers([buildTestOffer()]);
+    console.log('[Bootstrap] Oferta de teste adicionada à fila.');
+  }
+
+  if (config.autoStartCollector) {
+    console.log(`[Scheduler] Coletor por categoria iniciado. Intervalo: ${config.discoveryIntervalMinutes} min.`);
+    await runCategoryCycle(5).catch((error) => console.error('[Scheduler] Erro inicial na coleta por categoria:', error.message));
+    cron.schedule(`*/${config.discoveryIntervalMinutes} * * * *`, () => {
+      runCategoryCycle(5).catch((error) => console.error('[Scheduler] Erro na coleta por categoria:', error.message));
+    });
+  }
+
+  if (config.autoStartPublisher) {
+    console.log(`[Scheduler] Publicador iniciado. Intervalo: ${config.postIntervalMinutes} min.`);
+    await publishNextOffers().catch((error) => console.error('[Scheduler] Erro inicial ao publicar:', error.message));
+    cron.schedule(`*/${config.postIntervalMinutes} * * * *`, () => {
+      publishNextOffers().catch((error) => console.error('[Scheduler] Erro ao publicar:', error.message));
+    });
+  }
 }
 
 app.get('/health', (req, res) => {
@@ -205,27 +232,20 @@ app.listen(config.port, () => {
   console.log('[HTTP] Rotas: /health, /status, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
 });
 
-(async () => {
-  await connectWhatsApp();
-
-  if (config.seedTestOfferOnStart) {
-    enqueueOffers([buildTestOffer()]);
-    console.log('[Bootstrap] Oferta de teste adicionada à fila.');
+async function bootstrap() {
+  try {
+    await connectWhatsApp();
+    await startSchedulers();
+  } catch (error) {
+    console.error('[Bootstrap] Falha na inicialização do WhatsApp:', error.message);
+    setTimeout(() => {
+      bootstrap().catch((retryError) => {
+        console.error('[Bootstrap] Falha ao reiniciar bootstrap:', retryError.message);
+      });
+    }, 15000);
   }
+}
 
-  if (config.autoStartCollector) {
-    console.log(`[Scheduler] Coletor por categoria iniciado. Intervalo: ${config.discoveryIntervalMinutes} min.`);
-    await runCategoryCycle(5).catch((error) => console.error('[Scheduler] Erro inicial na coleta por categoria:', error.message));
-    cron.schedule(`*/${config.discoveryIntervalMinutes} * * * *`, () => {
-      runCategoryCycle(5).catch((error) => console.error('[Scheduler] Erro na coleta por categoria:', error.message));
-    });
-  }
-
-  if (config.autoStartPublisher) {
-    console.log(`[Scheduler] Publicador iniciado. Intervalo: ${config.postIntervalMinutes} min.`);
-    await publishNextOffers().catch((error) => console.error('[Scheduler] Erro inicial ao publicar:', error.message));
-    cron.schedule(`*/${config.postIntervalMinutes} * * * *`, () => {
-      publishNextOffers().catch((error) => console.error('[Scheduler] Erro ao publicar:', error.message));
-    });
-  }
-})();
+bootstrap().catch((error) => {
+  console.error('[Bootstrap] Erro inesperado:', error.message);
+});

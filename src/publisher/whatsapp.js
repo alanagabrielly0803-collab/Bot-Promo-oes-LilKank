@@ -85,7 +85,13 @@ async function connectWhatsApp() {
       if (lastDisconnect?.error) {
         console.error('[WhatsApp] Erro de desconexão:', lastDisconnect.error.message || lastDisconnect.error);
       }
-      if (shouldReconnect) await connectWhatsApp();
+      if (shouldReconnect) {
+        setTimeout(() => {
+          connectWhatsApp().catch((error) => {
+            console.error('[WhatsApp] Falha ao reconectar:', error.message);
+          });
+        }, 5000);
+      }
     }
   });
 
