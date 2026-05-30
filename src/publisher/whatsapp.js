@@ -13,7 +13,7 @@ const {
 } = require('@whiskeysockets/baileys');
 const config = require('../config');
 const { buildOfferMessage } = require('./messageBuilder');
-const { getPendingOffers, markSent, markSkipped, queueStats, loadQueue } = require('../queue/offerQueue');
+const { getPendingOffers, markSent, markSkipped, markImageReviewFailed, queueStats, loadQueue } = require('../queue/offerQueue');
 const { runCollector } = require('../collectorRunner');
 const { enrichAndValidateOffer, closePlaywrightBrowser } = require('../services/productQualityGate');
 
@@ -484,7 +484,7 @@ async function handleCommand(msg) {
 
   if (command === '/status') {
     const stats = queueStats();
-    await reply(jid, `Status: ${paused ? 'pausado' : 'ativo'}\nFila: ${stats.pending}\nEnviadas: ${stats.sent}\nGrupo alvo: ${config.whatsappGroupId || 'não configurado'}`);
+    await reply(jid, `Status: ${paused ? 'pausado' : 'ativo'}\nFila: ${stats.pending}\nProntas: ${stats.readyToPublish || 0}\nRevisão imagem: ${stats.pendingImageReview || 0}\nFalha imagem: ${stats.imageReviewFailed || 0}\nEnviadas: ${stats.sent}\nGrupo alvo: ${config.whatsappGroupId || 'não configurado'}`);
     return;
   }
 
@@ -501,9 +501,9 @@ async function handleCommand(msg) {
   }
 
   if (command === '/fila') {
-    const pending = loadQueue().filter((item) => item.status === 'pending').slice(0, 5);
+    const pending = loadQueue().filter((item) => item.status === 'ready_to_publish').slice(0, 5);
     if (!pending.length) {
-      await reply(jid, 'Fila vazia. Use /coletar para buscar novas ofertas nas fontes públicas.');
+      await reply(jid, 'Nenhuma oferta pronta para publicar. Use /coletar para buscar e revisar novas ofertas.');
       return;
     }
     await reply(jid, pending.map((offer, i) => `${i + 1}. ${offer.title}\n${offer.url}`).join('\n\n'));
@@ -513,7 +513,7 @@ async function handleCommand(msg) {
   if (command === '/coletar') {
     await reply(jid, 'Iniciando coleta agora...');
     const result = await runCollector();
-    await reply(jid, `Coleta finalizada. Coletadas: ${result.collected}. Novas na fila: ${result.added}. Pendentes: ${result.stats.pending}.`);
+    await reply(jid, `Coleta finalizada. Coletadas: ${result.collected}. Novas na fila: ${result.added}. Revisadas: ${result.review?.reviewed || 0}. Prontas: ${result.review?.ready || 0}. Pendentes: ${result.stats.pending}.`);
     return;
   }
 
@@ -603,9 +603,13 @@ async function sendOffer(targetJid, offer) {
 
 async function validateForPublish(offer) {
   if (!offer) return null;
+  if (offer.status === 'ready_to_publish') return offer;
   if (!config.publishOnlyValidated) return offer;
   const result = await enrichAndValidateOffer(offer);
-  if (!result?.ok) return null;
+  if (!result?.ok) {
+    markImageReviewFailed(offer, result || { reason: 'validation_failed' });
+    return null;
+  }
   return result.offer;
 }
 
@@ -640,8 +644,7 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
     try {
       const normalizedOffer = await validateForPublish(offer);
       if (!normalizedOffer) {
-        markSkipped(offer, { reason: 'validation_failed' });
-        console.log(`[Publisher] Oferta ignorada pelo quality gate: ${offer.title}`);
+        console.log(`[Publisher] Oferta mantida para revisão de imagem: ${offer.title}`);
         continue;
       }
 
@@ -650,8 +653,8 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
       delete persistedOffer.imageBuffer;
       delete persistedOffer.imageContentType;
       if (result.mode === 'skipped_no_verified_image') {
-        markSkipped(persistedOffer, result);
-        console.log(`[Publisher] Oferta ignorada por falta de imagem verificada: ${normalizedOffer.title}`);
+        markImageReviewFailed(persistedOffer, result);
+        console.log(`[Publisher] Oferta voltou para revisão por falta de imagem verificada: ${normalizedOffer.title}`);
         continue;
       }
 
