@@ -5,6 +5,9 @@ const { normalizeText } = require('../utils/text');
 const QUEUE_FILE = 'offers.queue.json';
 const SENT_FILE = 'offers.sent.json';
 const SKIPPED_FILE = 'offers.skipped.json';
+const STATUS_PENDING_REVIEW = 'pending_image_review';
+const STATUS_READY = 'ready_to_publish';
+const STATUS_REVIEW_FAILED = 'image_review_failed';
 
 function hash(value) {
   return crypto.createHash('sha1').update(String(value)).digest('hex');
@@ -31,7 +34,7 @@ function loadSkipped() {
 }
 
 function saveSkipped(items) {
-  writeJson(SKIPPED_FILE, items);
+  writeJson(SKIPPED_FILE, []);
 }
 
 function normalizeOfferUrl(url) {
@@ -59,6 +62,12 @@ function offerId(offer) {
   return hash(fallback || JSON.stringify(offer || {}));
 }
 
+function offerStatus(offer) {
+  if (offer?.status) return offer.status;
+  if (offer?.imageVerified || offer?.source === 'test') return STATUS_READY;
+  return STATUS_PENDING_REVIEW;
+}
+
 function enqueueOffers(offers) {
   const queue = loadQueue();
   const sent = loadSent();
@@ -68,7 +77,13 @@ function enqueueOffers(offers) {
 
   for (const raw of offers) {
     if (!raw || typeof raw !== 'object') continue;
-    const offer = { ...raw, id: offerId(raw), status: 'pending', createdAt: raw.createdAt || new Date().toISOString() };
+    const offer = {
+      ...raw,
+      id: offerId(raw),
+      status: offerStatus(raw),
+      imageReviewAttempts: Number(raw.imageReviewAttempts || 0),
+      createdAt: raw.createdAt || new Date().toISOString()
+    };
     if (!offer.url || known.has(offer.id)) continue;
     queue.push(offer);
     known.add(offer.id);
@@ -81,8 +96,51 @@ function enqueueOffers(offers) {
 
 function getPendingOffers(limit = 1, sourceUrl = null) {
   return loadQueue()
-    .filter((item) => item && item.status === 'pending' && (!sourceUrl || item.sourceUrl === sourceUrl))
+    .filter((item) => item && (item.status === STATUS_READY || item.status === 'pending') && (!sourceUrl || item.sourceUrl === sourceUrl))
     .slice(0, limit);
+}
+
+function getReviewOffers(limit = 10, sourceUrl = null, maxAttempts = 3) {
+  return loadQueue()
+    .filter((item) => {
+      if (!item || (sourceUrl && item.sourceUrl !== sourceUrl)) return false;
+      if (item.status === STATUS_READY || item.status === 'sent' || item.status === 'skipped') return false;
+      return Number(item.imageReviewAttempts || 0) < maxAttempts;
+    })
+    .slice(0, limit);
+}
+
+function updateQueuedOffer(offer, patch = {}) {
+  const id = offerId(offer);
+  const queue = loadQueue();
+  const index = queue.findIndex((item) => offerId(item) === id);
+  if (index < 0) return null;
+  queue[index] = { ...queue[index], ...patch, id };
+  saveQueue(queue);
+  return queue[index];
+}
+
+function markReadyToPublish(offer, validatedOffer = offer) {
+  const clean = { ...validatedOffer };
+  delete clean.imageBuffer;
+  delete clean.imageContentType;
+  return updateQueuedOffer(offer, {
+    ...clean,
+    status: STATUS_READY,
+    imageVerified: true,
+    imageReviewAttempts: Number(offer.imageReviewAttempts || 0) + 1,
+    imageReviewedAt: new Date().toISOString()
+  });
+}
+
+function markImageReviewFailed(offer, result = {}) {
+  return updateQueuedOffer(offer, {
+    status: STATUS_REVIEW_FAILED,
+    imageVerified: false,
+    imageReviewAttempts: Number(offer.imageReviewAttempts || 0) + 1,
+    imageReviewedAt: new Date().toISOString(),
+    lastImageReviewReason: result.reason || 'validation_failed'
+  });
 }
 
 function markSent(offer, result = {}) {
@@ -104,11 +162,28 @@ function markSkipped(offer, result = {}) {
 }
 
 function queueStats() {
+  const queue = loadQueue();
   return {
-    pending: loadQueue().filter((x) => x.status === 'pending').length,
+    pending: queue.filter((x) => x && !['sent', 'skipped'].includes(x.status)).length,
+    readyToPublish: queue.filter((x) => x.status === STATUS_READY).length,
+    pendingImageReview: queue.filter((x) => x.status === STATUS_PENDING_REVIEW || x.status === 'pending').length,
+    imageReviewFailed: queue.filter((x) => x.status === STATUS_REVIEW_FAILED).length,
     sent: loadSent().length,
     skipped: loadSkipped().length
   };
 }
 
-module.exports = { enqueueOffers, getPendingOffers, markSent, markSkipped, queueStats, loadQueue };
+module.exports = {
+  enqueueOffers,
+  getPendingOffers,
+  getReviewOffers,
+  markReadyToPublish,
+  markImageReviewFailed,
+  markSent,
+  markSkipped,
+  queueStats,
+  loadQueue,
+  STATUS_PENDING_REVIEW,
+  STATUS_READY,
+  STATUS_REVIEW_FAILED
+};
