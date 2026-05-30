@@ -77,6 +77,26 @@ async function pathExists(targetPath) {
   }
 }
 
+function getSafeAuthFolderPath() {
+  const resolvedPath = path.resolve(config.whatsappAuthFolder);
+  const cwd = process.cwd();
+  const insideProject = resolvedPath === cwd || resolvedPath.startsWith(`${cwd}${path.sep}`);
+  const insideStorage = resolvedPath.includes(`${path.sep}storage${path.sep}`) || resolvedPath.endsWith(`${path.sep}storage`);
+
+  if (!insideProject || !insideStorage || resolvedPath.length < 10) {
+    throw new Error(`Caminho de auth inseguro para reset: ${resolvedPath}`);
+  }
+
+  return resolvedPath;
+}
+
+async function resetAuthFolderForRepair() {
+  const authFolderPath = getSafeAuthFolderPath();
+  await fs.rm(authFolderPath, { recursive: true, force: true });
+  await fs.mkdir(authFolderPath, { recursive: true });
+  return authFolderPath;
+}
+
 async function getDirectoryDiagnostics(label, configuredPath) {
   const resolvedPath = path.resolve(configuredPath);
   const diagnostics = {
@@ -319,6 +339,34 @@ app.get('/api/storage-status', asyncRoute(async (req, res) => {
   });
 }));
 
+async function handleResetSession(req, res) {
+  const confirm = String(req.query.confirm || req.body?.confirm || '').trim().toUpperCase();
+  if (confirm !== 'RESET') {
+    res.status(400).json({
+      ok: false,
+      error: 'missing_confirmation',
+      message: 'Para resetar a sessão, envie confirm=RESET. Isso apaga apenas a pasta de autenticação do WhatsApp.'
+    });
+    return;
+  }
+
+  const authFolderPath = await resetAuthFolderForRepair();
+  res.json({
+    ok: true,
+    message: 'Sessão do WhatsApp apagada. O serviço será reiniciado para gerar um QR/código novo.',
+    authFolderPath,
+    restarting: true
+  });
+
+  setTimeout(() => {
+    console.warn('[HTTP] Reiniciando processo após reset manual da sessão do WhatsApp.');
+    process.exit(0);
+  }, 1200).unref?.();
+}
+
+app.get('/api/whatsapp/reset-session', asyncRoute(handleResetSession));
+app.post('/api/whatsapp/reset-session', asyncRoute(handleResetSession));
+
 app.post('/api/offers', (req, res) => {
   const body = req.body || {};
   const offer = {
@@ -415,7 +463,7 @@ app.use((error, req, res, next) => {
 
 app.listen(config.port, () => {
   console.log(`[HTTP] Servidor rodando na porta ${config.port}.`);
-  console.log('[HTTP] Rotas: /, /health, /qr, /status, GET /api/storage-status, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
+  console.log('[HTTP] Rotas: /, /health, /qr, /status, GET /api/storage-status, GET/POST /api/whatsapp/reset-session, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
 });
 
 async function bootstrap() {
