@@ -1,0 +1,83 @@
+services:
+  - type: web
+    name: ofertas-publicas-whatsapp-bot
+    runtime: node
+    plan: starter
+    branch: main
+    buildCommand: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:
+      name: bot-storage
+      mountPath: /opt/render/project/src/storage
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: DATA_DIR
+        value: ./storage/data
+      - key: WHATSAPP_AUTH_FOLDER
+        value: ./storage/auth_publico
+      - key: WHATSAPP_GROUP_ID
+        sync: false
+      - key: SEND_PRODUCT_IMAGE
+        value: true
+      - key: ALLOW_LINK_ONLY
+        value: true
+      - key: REQUIRE_VERIFIED_IMAGE
+        value: true
+      - key: ALLOW_UNTRUSTED_IMAGE_TESTING
+        value: false
+      - key: ALLOW_PAGE_IMAGE_AS_VERIFIED
+        value: true
+      - key: IMAGE_EXTRACTION_MODE
+        value: page_first
+      - key: IMAGE_MIN_CONFIDENCE
+        value: 70
+      - key: IMAGE_MIN_BYTES
+        value: 10000
+      - key: IMAGE_MIN_WIDTH
+        value: 180
+      - key: IMAGE_MIN_HEIGHT
+        value: 180
+      - key: IMAGE_REQUIRE_VALID_HTTP
+        value: true
+      - key: PLAYWRIGHT_IMAGE_FALLBACK
+        value: false
+      - key: PLAYWRIGHT_TIMEOUT_MS
+        value: 30000
+      - key: PUBLISH_ONLY_VALIDATED
+        value: true
+      - key: AUTO_START_PUBLISHER
+        value: false
+      - key: AUTO_START_COLLECTOR
+        value: true
+      - key: SEED_TEST_OFFER_ON_START
+        value: false
+      - key: SOURCE_PROVIDER
+        value: public_sources
+      - key: DISCOVERY_INTERVAL_MINUTES
+        value: 45
+      - key: POST_INTERVAL_MINUTES
+        value: 45
+      - key: MAX_POSTS_PER_RUN
+        value: 5
+      - key: MAX_LINKS_PER_SOURCE
+        value: 250
+      - key: GOOGLE_IMAGE_SEARCH_API_KEY
+        sync: false
+      - key: GOOGLE_IMAGE_SEARCH_CX
+        sync: false
+      - key: PUBLIC_SOURCE_URLS
+        value: https://ofertasdachloe.com.br/categoria/casa-moveis-e-decoracao,https://ofertasdachloe.com.br/categoria/beleza-e-cuidados-pessoais,https://ofertasdachloe.com.br/categoria/moda-e-acessorios,https://ofertasdachloe.com.br/categoria/infantil-e-brinquedos,https://ofertasdachloe.com.br/categoria/esporte-e-lazer,https://ofertasdachloe.com.br/categoria/supermercado,https://ofertasdachloe.com.br/categoria/games-e-geek
+      - key: RSS_SOURCE_URLS
+        value: ""
+      - key: OFFER_KEYWORDS
+        sync: false
+      - key: BLOCK_KEYWORDS
+        sync: false
+      - key: MIN_PRICE
+        value: 1
+      - key: MAX_PRICE
+        value: 500
