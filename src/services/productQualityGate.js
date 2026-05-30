@@ -711,10 +711,25 @@ async function enrichAndValidateOffer(rawCandidate) {
 
   if (!imageResult.ok) {
     if (config.allowUntrustedImageTesting) {
-      const fallbackImageUrl =
-        cleanText(rawCandidate?.imageUrl || rawCandidate?.image || imageResult.checked?.[0]?.url || '');
+      const fallbackImageUrl = cleanText(rawCandidate?.imageUrl || rawCandidate?.image || '');
+      const trustedFallbackSources = new Set([
+        'jsonld_product',
+        'og_image',
+        'og_image_secure_url',
+        'twitter_image',
+        'twitter_image_src',
+        'playwright_og_image',
+        'playwright_og_image_secure_url',
+        'playwright_twitter_image',
+        'playwright_twitter_image_src',
+        'dom_main_image',
+        'shopee_meta',
+        'shopee_page',
+        'google_image'
+      ]);
+      const fallbackIsTrusted = Boolean(rawCandidate?.imageVerified) || trustedFallbackSources.has(String(rawCandidate?.imageSource || ''));
 
-      if (!fallbackImageUrl) {
+      if (!fallbackImageUrl || !fallbackIsTrusted) {
         return reject('no_trusted_image', { title, pageUrl: finalUrl, imageResult });
       }
 
