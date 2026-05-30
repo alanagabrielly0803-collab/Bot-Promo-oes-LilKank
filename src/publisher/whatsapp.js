@@ -21,6 +21,7 @@ let paused = false;
 let currentQr = {
   value: '',
   svg: '',
+  png: '',
   updatedAt: null
 };
 let currentPairingCode = {
@@ -155,6 +156,19 @@ async function generateQrSvg(value) {
   });
 }
 
+async function generateQrPng(value) {
+  if (!value) return '';
+  return QRCode.toDataURL(value, {
+    width: 512,
+    margin: 2,
+    errorCorrectionLevel: 'M',
+    color: {
+      dark: '#000000',
+      light: '#FFFFFF'
+    }
+  });
+}
+
 async function connectWhatsApp() {
   await resetAuthFolderIfNeeded();
   const { state, saveCreds } = await useMultiFileAuthState(config.whatsappAuthFolder);
@@ -177,9 +191,11 @@ async function connectWhatsApp() {
       setCurrentQr(qr);
       try {
         currentQr.svg = await generateQrSvg(qr);
+        currentQr.png = await generateQrPng(qr);
       } catch (error) {
         console.error('[WhatsApp] Falha ao gerar QR SVG:', error.message);
         currentQr.svg = '';
+        currentQr.png = '';
       }
       const pairingPageUrl = getPairingPageUrl();
       if (pairingPageUrl) {
@@ -203,6 +219,7 @@ async function connectWhatsApp() {
       connectionState = 'open';
       setCurrentQr('');
       currentQr.svg = '';
+      currentQr.png = '';
       setCurrentPairingCode('');
       clearPairingRefreshTimer();
       console.log('[WhatsApp] Conectado com sucesso.');
@@ -244,6 +261,7 @@ function getWhatsAppStatus() {
     connectionState,
     qr: currentQr.value,
     qrSvg: currentQr.svg,
+    qrPng: currentQr.png,
     qrUpdatedAt: currentQr.updatedAt,
     pairingCode: currentPairingCode.value,
     pairingCodeUpdatedAt: currentPairingCode.updatedAt,

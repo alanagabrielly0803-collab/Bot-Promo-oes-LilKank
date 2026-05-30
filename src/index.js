@@ -67,9 +67,10 @@ app.get('/health', (req, res) => {
 app.get('/qr', (req, res) => {
   const status = getWhatsAppStatus();
   const svg = status.qrSvg || '';
+  const png = status.qrPng || '';
   const pairingCode = status.pairingCode || '';
   const loginMethod = status.loginMethod || 'qr';
-  const showQr = Boolean(svg);
+  const showQr = Boolean(png || svg);
   const showPairing = Boolean(pairingCode) || loginMethod === 'pairing';
   const title = status.connectionState === 'open'
     ? 'WhatsApp conectado'
@@ -111,7 +112,7 @@ app.get('/qr', (req, res) => {
     return;
   }
 
-  const svgBase64 = Buffer.from(svg).toString('base64');
+  const qrSrc = png || (svg ? `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}` : '');
   res.type('html').send(`<!doctype html>
     <html lang="pt-BR">
       <head>
@@ -135,7 +136,7 @@ app.get('/qr', (req, res) => {
         <div class="card">
           <h1>${title}</h1>
           <p class="muted">${showPairing ? 'Digite o código de pareamento no WhatsApp do celular.' : 'Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.'}</p>
-          ${showQr ? `<div class="qr-wrap"><img alt="QR Code do WhatsApp" src="data:image/svg+xml;base64,${svgBase64}" /></div>` : ''}
+          ${showQr ? `<div class="qr-wrap"><img alt="QR Code do WhatsApp" src="${qrSrc}" width="360" height="360" /></div>` : ''}
           ${showPairing ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode || 'Aguardando código...'}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
           <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
           <p class="muted">Atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
