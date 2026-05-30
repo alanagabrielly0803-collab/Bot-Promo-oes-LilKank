@@ -69,14 +69,14 @@ app.get('/qr', (req, res) => {
   const svg = status.qrSvg || '';
   const pairingCode = status.pairingCode || '';
   const loginMethod = status.loginMethod || 'qr';
-  const showQr = loginMethod !== 'pairing' && Boolean(svg);
+  const showQr = Boolean(svg);
   const showPairing = Boolean(pairingCode) || loginMethod === 'pairing';
   const title = status.connectionState === 'open'
     ? 'WhatsApp conectado'
-    : showPairing
-      ? 'Código de pareamento do WhatsApp'
-      : showQr
+    : showQr
       ? 'Escaneie o QR do WhatsApp'
+      : showPairing
+        ? 'Código de pareamento do WhatsApp'
       : 'Aguardando QR do WhatsApp';
 
   if (!showQr && !showPairing) {
