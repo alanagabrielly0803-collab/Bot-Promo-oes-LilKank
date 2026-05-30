@@ -260,11 +260,6 @@ async function bootstrap() {
     await startSchedulers();
   } catch (error) {
     console.error('[Bootstrap] Falha na inicialização do WhatsApp:', error.message);
-    setTimeout(() => {
-      bootstrap().catch((retryError) => {
-        console.error('[Bootstrap] Falha ao reiniciar bootstrap:', retryError.message);
-      });
-    }, 15000);
   }
 }
 

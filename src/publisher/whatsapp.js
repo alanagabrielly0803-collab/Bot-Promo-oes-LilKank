@@ -31,6 +31,8 @@ let currentPairingCode = {
 let connectionState = 'idle';
 let pairingRequested = false;
 let pairingRefreshTimer = null;
+let reconnectTimer = null;
+let connectInFlight = false;
 const PAIRING_CODE_TTL_MS = 90 * 1000;
 const PAIRING_REFRESH_INTERVAL_MS = 30 * 1000;
 
@@ -114,6 +116,46 @@ function clearPairingRefreshTimer() {
     clearInterval(pairingRefreshTimer);
     pairingRefreshTimer = null;
   }
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function disposeCurrentSocket() {
+  if (!sock) return;
+
+  try { sock.ev?.removeAllListeners?.(); } catch {}
+  try { sock.ws?.removeAllListeners?.(); } catch {}
+  try { sock.ws?.close?.(); } catch {}
+
+  sock = undefined;
+}
+
+function scheduleReconnect(statusCode, reason = 'unknown') {
+  if (reconnectTimer) return;
+
+  const delayMs = statusCode === DisconnectReason.connectionReplaced
+    ? 15000
+    : statusCode === DisconnectReason.connectionClosed
+      ? 8000
+      : 10000;
+
+  console.log(`[WhatsApp] Agendando reconexão em ${Math.round(delayMs / 1000)}s (${reason}).`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (connectInFlight) {
+      scheduleReconnect(statusCode, 'connect_in_flight');
+      return;
+    }
+    connectWhatsApp().catch((error) => {
+      console.error('[WhatsApp] Falha ao reconectar:', error.message);
+    });
+  }, delayMs);
+  reconnectTimer.unref?.();
 }
 
 function startPairingRefreshTimer() {
@@ -200,91 +242,97 @@ async function generateQrPng(value) {
 }
 
 async function connectWhatsApp() {
+  if (connectInFlight) return sock;
+  connectInFlight = true;
+  clearReconnectTimer();
+  disposeCurrentSocket();
+
   await resetAuthFolderIfNeeded();
-  const { state, saveCreds } = await useMultiFileAuthState(config.whatsappAuthFolder);
-  const { version } = await fetchLatestBaileysVersion();
-  connectionState = 'connecting';
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(config.whatsappAuthFolder);
+    const { version } = await fetchLatestBaileysVersion();
+    connectionState = 'connecting';
 
-  sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: 'silent' }),
-    version,
-    browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0']
-  });
+    sock = makeWASocket({
+      auth: state,
+      logger: pino({ level: 'silent' }),
+      version,
+      browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0']
+    });
 
-  sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-    if (qr) {
-      connectionState = 'qr';
-      setCurrentQr(qr);
-      try {
-        currentQr.svg = await generateQrSvg(qr);
-        currentQr.png = await generateQrPng(qr);
-      } catch (error) {
-        console.error('[WhatsApp] Falha ao gerar QR SVG:', error.message);
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr) {
+        connectionState = 'qr';
+        setCurrentQr(qr);
+        try {
+          currentQr.svg = await generateQrSvg(qr);
+          currentQr.png = await generateQrPng(qr);
+        } catch (error) {
+          console.error('[WhatsApp] Falha ao gerar QR SVG:', error.message);
+          currentQr.svg = '';
+          currentQr.png = '';
+        }
+        const pairingPageUrl = getPairingPageUrl();
+        if (pairingPageUrl) {
+          console.log(`[WhatsApp] Abra o login do bot em: ${pairingPageUrl}`);
+        }
+        if (config.whatsappLoginMethod === 'qr') {
+          console.log('[WhatsApp] Escaneie o QR Code na página /qr.');
+          qrcode.generate(qr, { small: true });
+        }
+        if (canRequestPairingCode()) {
+          startPairingRefreshTimer();
+          setTimeout(() => {
+            maybeRequestPairingCode('qr-event').catch((error) => {
+              console.error('[WhatsApp] Erro ao iniciar pareamento:', error.message);
+            });
+          }, 2500);
+        }
+      }
+
+      if (connection === 'open') {
+        connectionState = 'open';
+        getSocketIdentityId();
+        setCurrentQr('');
         currentQr.svg = '';
         currentQr.png = '';
-      }
-      const pairingPageUrl = getPairingPageUrl();
-      if (pairingPageUrl) {
-        console.log(`[WhatsApp] Abra o login do bot em: ${pairingPageUrl}`);
-      }
-      if (config.whatsappLoginMethod === 'qr') {
-        console.log('[WhatsApp] Escaneie o QR Code na página /qr.');
-        qrcode.generate(qr, { small: true });
-      }
-      if (canRequestPairingCode()) {
-        startPairingRefreshTimer();
-        setTimeout(() => {
-          maybeRequestPairingCode('qr-event').catch((error) => {
-            console.error('[WhatsApp] Erro ao iniciar pareamento:', error.message);
-          });
-        }, 2500);
-      }
-    }
-
-    if (connection === 'open') {
-      connectionState = 'open';
-      getSocketIdentityId();
-      setCurrentQr('');
-      currentQr.svg = '';
-      currentQr.png = '';
-      setCurrentPairingCode('');
-      clearPairingRefreshTimer();
-      console.log('[WhatsApp] Conectado com sucesso.');
-    }
-
-    if (connection === 'close') {
-      connectionState = 'close';
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log('[WhatsApp] Conexão fechada.', `status=${statusCode || 'n/a'}.`, shouldReconnect ? 'Reconectando...' : 'Sessão encerrada.');
-      if (lastDisconnect?.error) {
-        console.error('[WhatsApp] Erro de desconexão:', lastDisconnect.error.message || lastDisconnect.error);
-      }
-      if (shouldReconnect) {
-        pairingRequested = false;
         setCurrentPairingCode('');
         clearPairingRefreshTimer();
-        setTimeout(() => {
-          connectWhatsApp().catch((error) => {
-            console.error('[WhatsApp] Falha ao reconectar:', error.message);
-          });
-        }, 5000);
+        clearReconnectTimer();
+        console.log('[WhatsApp] Conectado com sucesso.');
       }
-    }
-  });
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    for (const msg of messages || []) {
-      if (!msg.message || msg.key.fromMe) continue;
-      await handleCommand(msg).catch((error) => console.error('[WhatsApp] Erro em comando:', error.message));
-    }
-  });
+      if (connection === 'close') {
+        connectionState = 'close';
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        console.log('[WhatsApp] Conexão fechada.', `status=${statusCode || 'n/a'}.`, shouldReconnect ? 'Reconectando...' : 'Sessão encerrada.');
+        if (lastDisconnect?.error) {
+          console.error('[WhatsApp] Erro de desconexão:', lastDisconnect.error.message || lastDisconnect.error);
+        }
+        clearPairingRefreshTimer();
+        pairingRequested = false;
+        setCurrentPairingCode('');
+        if (shouldReconnect) {
+          scheduleReconnect(statusCode, lastDisconnect?.error?.message || 'close');
+        }
+      }
+    });
 
-  return sock;
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+      for (const msg of messages || []) {
+        if (!msg.message || msg.key.fromMe) continue;
+        await handleCommand(msg).catch((error) => console.error('[WhatsApp] Erro em comando:', error.message));
+      }
+    });
+
+    return sock;
+  } finally {
+    connectInFlight = false;
+  }
 }
 
 function getWhatsAppStatus() {
