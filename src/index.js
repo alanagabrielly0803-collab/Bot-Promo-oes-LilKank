@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
 const config = require('./config');
-const { connectWhatsApp, publishNextOffers, sendOfferDirect } = require('./publisher/whatsapp');
+const { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus } = require('./publisher/whatsapp');
 const { runCollector, runCategoryCycle } = require('./collectorRunner');
 const { collectFromPublicPages } = require('./sources/publicWebSource');
 const { queueStats, enqueueOffers } = require('./queue/offerQueue');
@@ -35,6 +35,76 @@ async function runCategoryCollectAndPublish(limit = 5) {
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, stats: queueStats(), time: new Date().toISOString() });
+});
+
+app.get('/qr', (req, res) => {
+  const status = getWhatsAppStatus();
+  const svg = status.qrSvg || '';
+  const title = status.connectionState === 'open'
+    ? 'WhatsApp conectado'
+    : status.qr
+      ? 'Escaneie o QR do WhatsApp'
+      : 'Aguardando QR do WhatsApp';
+
+  if (!svg) {
+    res.type('html').send(`<!doctype html>
+      <html lang="pt-BR">
+        <head>
+          <meta charset="utf-8" />
+          <meta http-equiv="refresh" content="5" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>${title}</title>
+          <style>
+            body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 24px; }
+            .card { max-width: 640px; width: 100%; background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
+            code, pre { white-space: pre-wrap; word-break: break-word; }
+            .muted { color: #94a3b8; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>${title}</h1>
+            <p class="muted">Esta página atualiza automaticamente a cada 5 segundos.</p>
+            <p>Se o QR ainda não apareceu, aguarde o WhatsApp gerar a sessão no Render.</p>
+            <p>Status atual: <strong>${status.connectionState}</strong></p>
+            <p>Atualizado em: <strong>${status.qrUpdatedAt || 'ainda não'}</strong></p>
+          </div>
+        </body>
+      </html>`);
+    return;
+  }
+
+  const svgBase64 = Buffer.from(svg).toString('base64');
+  res.type('html').send(`<!doctype html>
+    <html lang="pt-BR">
+      <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="refresh" content="${status.connectionState === 'open' ? '30' : '5'}" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>${title}</title>
+        <style>
+          body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 24px; }
+          .card { max-width: 720px; width: 100%; background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 12px 30px rgba(0,0,0,.35); text-align: center; }
+          .qr-wrap { background: #fff; padding: 18px; border-radius: 16px; display: inline-block; }
+          img { max-width: 100%; height: auto; display: block; }
+          .muted { color: #94a3b8; }
+          .ok { color: #4ade80; font-weight: 700; }
+          code { background: #0b1120; padding: 2px 6px; border-radius: 6px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>${title}</h1>
+          <p class="muted">Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.</p>
+          <div class="qr-wrap">
+            <img alt="QR Code do WhatsApp" src="data:image/svg+xml;base64,${svgBase64}" />
+          </div>
+          <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
+          <p class="muted">Atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
+          <p class="muted">Se a página mudar para <code>open</code>, o bot já conectou.</p>
+        </div>
+      </body>
+    </html>`);
 });
 
 app.get('/status', (req, res) => {

@@ -62,6 +62,16 @@ https://SEU-SERVICO.onrender.com/health
 
 O endpoint retorna `200` quando o servidor HTTP está no ar.
 
+## QR do WhatsApp no Render
+
+Se o QR não ficar legível no log, abra:
+
+```txt
+https://SEU-SERVICO.onrender.com/qr
+```
+
+Essa página mostra o QR em imagem e atualiza automaticamente até o WhatsApp conectar.
+
 ## Git
 
 Fluxo sugerido:

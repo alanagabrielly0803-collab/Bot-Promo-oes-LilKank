@@ -1,4 +1,5 @@
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
 const {
@@ -15,10 +16,35 @@ const { enrichAndValidateOffer, closePlaywrightBrowser } = require('../services/
 
 let sock;
 let paused = false;
+let currentQr = {
+  value: '',
+  svg: '',
+  updatedAt: null
+};
+let connectionState = 'idle';
+
+function setCurrentQr(value) {
+  currentQr.value = value || '';
+  currentQr.updatedAt = new Date().toISOString();
+}
+
+async function generateQrSvg(value) {
+  if (!value) return '';
+  return QRCode.toString(value, {
+    type: 'svg',
+    margin: 1,
+    errorCorrectionLevel: 'M',
+    color: {
+      dark: '#000000',
+      light: '#FFFFFF'
+    }
+  });
+}
 
 async function connectWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(config.whatsappAuthFolder);
   const { version } = await fetchLatestBaileysVersion();
+  connectionState = 'connecting';
 
   sock = makeWASocket({
     auth: state,
@@ -32,15 +58,27 @@ async function connectWhatsApp() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
+      connectionState = 'qr';
+      setCurrentQr(qr);
+      try {
+        currentQr.svg = await generateQrSvg(qr);
+      } catch (error) {
+        console.error('[WhatsApp] Falha ao gerar QR SVG:', error.message);
+        currentQr.svg = '';
+      }
       console.log('[WhatsApp] Escaneie o QR Code abaixo:');
       qrcode.generate(qr, { small: true });
     }
 
     if (connection === 'open') {
+      connectionState = 'open';
+      setCurrentQr('');
+      currentQr.svg = '';
       console.log('[WhatsApp] Conectado com sucesso.');
     }
 
     if (connection === 'close') {
+      connectionState = 'close';
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log('[WhatsApp] Conexão fechada.', `status=${statusCode || 'n/a'}.`, shouldReconnect ? 'Reconectando...' : 'Sessão encerrada.');
@@ -59,6 +97,15 @@ async function connectWhatsApp() {
   });
 
   return sock;
+}
+
+function getWhatsAppStatus() {
+  return {
+    connectionState,
+    qr: currentQr.value,
+    qrSvg: currentQr.svg,
+    qrUpdatedAt: currentQr.updatedAt
+  };
 }
 
 function getMessageText(msg) {
@@ -247,4 +294,4 @@ process.on('exit', () => {
   closePlaywrightBrowser().catch(() => {});
 });
 
-module.exports = { connectWhatsApp, publishNextOffers, sendOfferDirect };
+module.exports = { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus };
