@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
 const config = require('./config');
-const { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus } = require('./publisher/whatsapp');
+const { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus, waitForWhatsAppReady } = require('./publisher/whatsapp');
 const { runCollector, runCategoryCycle } = require('./collectorRunner');
 const { collectFromPublicPages } = require('./sources/publicWebSource');
 const { queueStats, enqueueOffers } = require('./queue/offerQueue');
@@ -253,6 +253,10 @@ app.listen(config.port, () => {
 async function bootstrap() {
   try {
     await connectWhatsApp();
+    const ready = await waitForWhatsAppReady(120000);
+    if (!ready) {
+      throw new Error('WhatsApp não ficou pronto a tempo.');
+    }
     await startSchedulers();
   } catch (error) {
     console.error('[Bootstrap] Falha na inicialização do WhatsApp:', error.message);

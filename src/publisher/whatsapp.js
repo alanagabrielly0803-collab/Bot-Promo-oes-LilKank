@@ -34,6 +34,32 @@ let pairingRefreshTimer = null;
 const PAIRING_CODE_TTL_MS = 90 * 1000;
 const PAIRING_REFRESH_INTERVAL_MS = 30 * 1000;
 
+function getSocketIdentityId() {
+  const currentId = String(sock?.authState?.creds?.me?.id || '').trim();
+  if (currentId) return currentId;
+
+  const sockUserId = String(sock?.user?.id || sock?.user?.jid || '').trim();
+  if (sockUserId && sock?.authState?.creds) {
+    sock.authState.creds.me = {
+      ...(sock.authState.creds.me || {}),
+      id: sockUserId
+    };
+    return sockUserId;
+  }
+
+  return '';
+}
+
+async function waitForWhatsAppReady(timeoutMs = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const ready = connectionState === 'open' && getSocketIdentityId();
+    if (ready) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
 function getPublicBaseUrl() {
   return String(
     process.env.RENDER_EXTERNAL_URL ||
@@ -221,6 +247,7 @@ async function connectWhatsApp() {
 
     if (connection === 'open') {
       connectionState = 'open';
+      getSocketIdentityId();
       setCurrentQr('');
       currentQr.svg = '';
       currentQr.png = '';
@@ -350,6 +377,9 @@ async function sendOffer(targetJid, offer) {
   if (!normalizedTargetJid) {
     return { mode: 'error', reason: 'missing_group_id' };
   }
+  if (!getSocketIdentityId()) {
+    return { mode: 'error', reason: 'missing_whatsapp_identity' };
+  }
 
   const caption = buildOfferMessage(offer);
 
@@ -418,6 +448,7 @@ async function validateForPublish(offer) {
 async function sendOfferDirect(targetJid, offer) {
   if (!sock) return { sent: false, reason: 'whatsapp_not_connected' };
   if (!targetJid) return { sent: false, reason: 'missing_group_id' };
+  if (!getSocketIdentityId()) return { sent: false, reason: 'missing_whatsapp_identity' };
   const normalizedOffer = await validateForPublish(offer);
   if (!normalizedOffer) return { sent: false, reason: 'validation_failed' };
   const result = await sendOffer(targetJid, normalizedOffer);
@@ -427,6 +458,7 @@ async function sendOfferDirect(targetJid, offer) {
 async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = null, sourceUrl = null) {
   if (!sock) return { sent: 0, reason: 'whatsapp_not_connected' };
   if (paused && !overrideJid) return { sent: 0, reason: 'paused' };
+  if (!getSocketIdentityId()) return { sent: 0, reason: 'missing_whatsapp_identity' };
 
   const targetJid = overrideJid || config.whatsappGroupId;
   if (!targetJid) {
@@ -471,4 +503,4 @@ process.on('exit', () => {
   closePlaywrightBrowser().catch(() => {});
 });
 
-module.exports = { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus };
+module.exports = { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus, waitForWhatsAppReady };
