@@ -26,6 +26,8 @@ services:
         value: pairing
       - key: WHATSAPP_PAIRING_PHONE
         sync: false
+      - key: RESET_WHATSAPP_AUTH_ON_START
+        value: false
       - key: SEND_PRODUCT_IMAGE
         value: true
       - key: ALLOW_LINK_ONLY

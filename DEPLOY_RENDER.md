@@ -39,6 +39,7 @@ As variáveis principais já estão no `render.yaml`, mas vale conferir no paine
 WHATSAPP_GROUP_ID=
 WHATSAPP_LOGIN_METHOD=pairing
 WHATSAPP_PAIRING_PHONE=
+RESET_WHATSAPP_AUTH_ON_START=false
 WHATSAPP_AUTH_FOLDER=./storage/auth_publico
 DATA_DIR=./storage/data
 AUTO_START_COLLECTOR=true
@@ -84,6 +85,16 @@ Se você mudar `WHATSAPP_LOGIN_METHOD` para `both`, ela também tenta exibir QR.
 - `both`: mostra QR e tenta gerar o código de pareamento ao mesmo tempo
 
 Se você quiser usar `pairing` ou `both`, preencha `WHATSAPP_PAIRING_PHONE` com o número no formato internacional, só dígitos.
+
+## Forçar novo pareamento
+
+Se o Render ficar preso em uma sessão antiga ou der erro ao sincronizar com o código, coloque:
+
+```env
+RESET_WHATSAPP_AUTH_ON_START=true
+```
+
+Faça um deploy uma vez, complete o pareamento, e depois volte para `false`.
 
 ## Git
 

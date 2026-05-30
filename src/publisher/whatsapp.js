@@ -2,6 +2,8 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const pino = require('pino');
 const axios = require('axios');
+const fs = require('fs/promises');
+const path = require('path');
 const {
   default: makeWASocket,
   DisconnectReason,
@@ -27,6 +29,19 @@ let currentPairingCode = {
 };
 let connectionState = 'idle';
 let pairingRequested = false;
+
+async function resetAuthFolderIfNeeded() {
+  if (!config.resetWhatsAppAuthOnStart) return;
+
+  const folder = path.resolve(config.whatsappAuthFolder);
+  if (!folder || folder === path.resolve('.') || folder.length < 5) {
+    throw new Error(`Recusando limpeza de auth em caminho inseguro: ${folder}`);
+  }
+
+  await fs.rm(folder, { recursive: true, force: true });
+  await fs.mkdir(folder, { recursive: true });
+  console.log(`[WhatsApp] Sessão limpa em ${folder} para novo pareamento.`);
+}
 
 function setCurrentQr(value) {
   currentQr.value = value || '';
@@ -85,6 +100,7 @@ async function generateQrSvg(value) {
 }
 
 async function connectWhatsApp() {
+  await resetAuthFolderIfNeeded();
   const { state, saveCreds } = await useMultiFileAuthState(config.whatsappAuthFolder);
   const { version } = await fetchLatestBaileysVersion();
   connectionState = 'connecting';
