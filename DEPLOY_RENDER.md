@@ -28,7 +28,7 @@ No `render.yaml`, isso já foi configurado com um disco montado em:
 1. Suba este diretório para um repositório Git.
 2. Conecte esse repositório ao Render.
 3. Garanta que o serviço use o `render.yaml`.
-4. No primeiro boot, confira os logs do Render e use o código de pareamento do WhatsApp.
+4. No primeiro boot, confira os logs do Render e escaneie o QR Code do WhatsApp.
 5. Depois que a sessão ficar salva no disco, o bot passa a reconectar sem QR novo a cada deploy.
 
 ## Variáveis importantes no Render
@@ -37,7 +37,7 @@ As variáveis principais já estão no `render.yaml`, mas vale conferir no paine
 
 ```env
 WHATSAPP_GROUP_ID=
-WHATSAPP_LOGIN_METHOD=pairing
+WHATSAPP_LOGIN_METHOD=qr
 WHATSAPP_PAIRING_PHONE=
 RESET_WHATSAPP_AUTH_ON_START=false
 WHATSAPP_AUTH_FOLDER=./storage/auth_publico
@@ -67,7 +67,7 @@ O endpoint retorna `200` quando o servidor HTTP está no ar.
 
 ## Login do WhatsApp no Render
 
-Para evitar QR deformado no log do Render, o modo recomendado é `pairing`.
+Para evitar QR deformado no log do Render, o modo recomendado é `qr`.
 
 Abra:
 
@@ -75,8 +75,8 @@ Abra:
 https://SEU-SERVICO.onrender.com/qr
 ```
 
-Essa página mostra o código de pareamento e atualiza automaticamente até o WhatsApp conectar.
-Se você mudar `WHATSAPP_LOGIN_METHOD` para `both`, ela também tenta exibir QR.
+Essa página mostra o QR em imagem e atualiza automaticamente até o WhatsApp conectar.
+Se você mudar `WHATSAPP_LOGIN_METHOD` para `pairing` ou `both`, ela também mostra o código de pareamento.
 
 ## Modos de login
 

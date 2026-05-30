@@ -23,7 +23,7 @@ services:
       - key: WHATSAPP_GROUP_ID
         sync: false
       - key: WHATSAPP_LOGIN_METHOD
-        value: pairing
+        value: qr
       - key: WHATSAPP_PAIRING_PHONE
         sync: false
       - key: RESET_WHATSAPP_AUTH_ON_START

@@ -179,6 +179,7 @@ async function connectWhatsApp() {
     auth: state,
     logger: pino({ level: 'silent' }),
     version,
+    printQRInTerminal: config.whatsappLoginMethod !== 'pairing',
     browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0']
   });
 
