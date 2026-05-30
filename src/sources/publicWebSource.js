@@ -2,7 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const config = require('../config');
 const { cleanTitle, normalizeText, isGenericTitle, titleFromSlug } = require('../utils/text');
-const { isShopeeUrl, enrichOfferFromUrl, resolveShopeeProductDetails, passesKeywordFilter } = require('./offerExtractor');
+const { isShopeeUrl, passesKeywordFilter } = require('./offerExtractor');
 
 function absolutizeUrl(href, baseUrl) {
   try {
@@ -15,11 +15,33 @@ function absolutizeUrl(href, baseUrl) {
 function normalizeImageUrl(url, baseUrl) {
   if (!url) return '';
   try {
-    const absolute = new URL(url, baseUrl).toString();
-    return absolute;
+    return new URL(String(url).trim(), baseUrl).toString();
   } catch {
-    return String(url);
+    return String(url || '').trim();
   }
+}
+
+function pickBestFromSrcset(srcset, baseUrl) {
+  if (!srcset) return '';
+  const candidates = String(srcset)
+    .split(',')
+    .map((part) => part.trim())
+    .map((part) => {
+      const [url, descriptor] = part.split(/\s+/);
+      const width = descriptor?.endsWith('w') ? Number(descriptor.replace('w', '')) : 0;
+      const density = descriptor?.endsWith('x') ? Number(descriptor.replace('x', '')) : 0;
+      return { url: normalizeImageUrl(url, baseUrl), width, density };
+    })
+    .filter((item) => item.url);
+  candidates.sort((a, b) => (b.width || b.density || 0) - (a.width || a.density || 0));
+  return candidates[0]?.url || '';
+}
+
+function isBadCollectedImageUrl(url) {
+  const text = String(url || '').toLowerCase();
+  if (!text) return true;
+  if (!/^https?:\/\//i.test(text)) return true;
+  return /logo|banner|placeholder|sprite|avatar|category|categoria|default|loading|transparent|pixel|blank|no-image|sem-imagem|favicon|icon/i.test(text);
 }
 
 function isXmlSitemap(url) {
@@ -56,7 +78,6 @@ function extractBestPriceText(text) {
     .filter((item) => !item.blocked && Number.isFinite(item.value));
 
   if (!candidates.length) return '';
-
   candidates.sort((a, b) => a.value - b.value);
   return candidates[0].raw;
 }
@@ -95,44 +116,6 @@ function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function findPriceByTitle(bodyText, title) {
-  const normalizedBody = String(bodyText || '').replace(/\s+/g, ' ');
-  const normalizedTitle = String(title || '').replace(/\s+/g, ' ').trim();
-  if (!normalizedTitle) return '';
-
-  const titleIndex = normalizedBody.indexOf(normalizedTitle);
-  const scope = titleIndex >= 0
-    ? normalizedBody.slice(titleIndex, titleIndex + 400)
-    : normalizedBody;
-
-  const patterns = [
-    /(?:\d{1,3}%\s*OFF\s*)?de\s*R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}\s*por\s*R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}/i,
-    /(?:\d{1,3}%\s*OFF\s*)?por\s*R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}/i,
-    /R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = scope.match(pattern);
-    if (match) {
-      return match[0]
-        .replace(/(\d{1,3})%\s*OFF/i, '$1% OFF')
-        .replace(/\s*de\s*/i, ' de ')
-        .replace(/\s*por\s*/i, ' por ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
-  }
-
-  const regex = new RegExp(`${escapeRegExp(normalizedTitle)}[\\s\\S]{0,400}?(?:\\d{1,3}%\\s*OFF\\s*)?de\\s*R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}\\s*por\\s*R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}|(?:\\d{1,3}%\\s*OFF\\s*)?por\\s*R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}|R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}`, 'i');
-  const regexMatch = normalizedBody.match(regex);
-  return regexMatch ? regexMatch[0]
-    .replace(/(\d{1,3})%\s*OFF/i, '$1% OFF')
-    .replace(/\s*de\s*/i, ' de ')
-    .replace(/\s*por\s*/i, ' por ')
-    .replace(/\s+/g, ' ')
-    .trim() : '';
-}
-
 function scoreImageForTitle(image, titleTokens) {
   const haystack = normalizeText(`${image.src || ''} ${image.alt || ''}`);
   let score = 0;
@@ -140,59 +123,78 @@ function scoreImageForTitle(image, titleTokens) {
     if (token.length < 3) continue;
     if (haystack.includes(token)) score += 2;
   }
-  if (/robo|aspirador|limpeza|automatica/.test(haystack)) score += 2;
   return score;
 }
 
-const MIN_CARD_IMAGE_SCORE = 6;
-const MIN_PAGE_IMAGE_SCORE = 6;
+function extractImageFromImgNode($, node, sourceUrl) {
+  const srcset =
+    node.attr('srcset') ||
+    node.attr('data-srcset') ||
+    node.attr('data-lazy-srcset') ||
+    '';
+
+  const srcsetUrl = pickBestFromSrcset(srcset, sourceUrl);
+  const raw =
+    srcsetUrl ||
+    node.attr('data-zoom-image') ||
+    node.attr('data-large-image') ||
+    node.attr('data-original') ||
+    node.attr('data-lazy-src') ||
+    node.attr('data-src') ||
+    node.attr('src') ||
+    '';
+
+  const src = normalizeImageUrl(raw, sourceUrl);
+  if (isBadCollectedImageUrl(src)) return null;
+
+  return {
+    src,
+    alt: node.attr('alt') || node.attr('title') || '',
+    width: Number(node.attr('width') || 0),
+    height: Number(node.attr('height') || 0),
+    source: srcsetUrl ? 'card_srcset' : 'card_img'
+  };
+}
 
 function findBestCardImage($, $element, sourceUrl, title) {
   const titleTokens = normalizeText(title || '')
     .split(' ')
     .filter((token) => token.length >= 3 && !['dia', 'ofertas', 'uol', 'ver', 'oferta', 'postado'].includes(token));
 
-  let best = { src: '', score: -1, alt: '' };
+  let best = { src: '', score: -1, alt: '', source: '' };
+  let firstValid = null;
   let current = $element;
 
-  for (let depth = 0; depth < 4 && current && current.length; depth += 1) {
+  for (let depth = 0; depth < 6 && current && current.length; depth += 1) {
     const container = current.is('article, li, div, section') ? current : current.closest('article, li, div, section');
     const scope = container && container.length ? container : current;
 
     scope.find('img').each((_, img) => {
-      const node = $(img);
-      const src = node.attr('src') || node.attr('data-src') || node.attr('data-lazy-src') || node.attr('srcset') || '';
-      const alt = node.attr('alt') || node.attr('title') || '';
-      if (!src && !alt) return;
-      const image = {
-        src: normalizeImageUrl(src, sourceUrl),
-        alt
-      };
-      if (!image.src) return;
-      const score = scoreImageForTitle(image, titleTokens);
+      const image = extractImageFromImgNode($, $(img), sourceUrl);
+      if (!image) return;
+      if (!firstValid) firstValid = image;
+      const score = scoreImageForTitle(image, titleTokens) + (image.width >= 250 ? 1 : 0) + (image.height >= 250 ? 1 : 0);
       if (score > best.score) {
-        best = { src: image.src, score, alt };
+        best = { ...image, score };
       }
     });
 
+    if (best.score >= 2 || firstValid) break;
     current = current.parent();
   }
 
-  return best.score >= MIN_CARD_IMAGE_SCORE ? best.src : '';
+  return best.src || firstValid?.src || '';
 }
 
-function pickBestImageForTitle($, title) {
+function pickBestImageForTitle($, title, sourceUrl) {
   const tokens = normalizeText(title)
     .split(' ')
     .filter((token) => token.length >= 3 && !['dia', 'ofertas', 'uol'].includes(token));
 
   const images = [];
   $('img').each((_, img) => {
-    const node = $(img);
-    const src = node.attr('src') || node.attr('data-src') || node.attr('data-lazy-src') || node.attr('srcset') || '';
-    const alt = node.attr('alt') || '';
-    if (!src && !alt) return;
-    images.push({ src: normalizeImageUrl(src, 'https://www.uol.com.br'), alt });
+    const image = extractImageFromImgNode($, $(img), sourceUrl);
+    if (image) images.push(image);
   });
 
   if (!images.length) return '';
@@ -200,7 +202,7 @@ function pickBestImageForTitle($, title) {
     .map((image) => ({ ...image, score: scoreImageForTitle(image, tokens) }))
     .sort((a, b) => b.score - a.score);
 
-  return ranked[0]?.score >= MIN_PAGE_IMAGE_SCORE ? ranked[0].src : '';
+  return ranked[0]?.src || '';
 }
 
 function extractMeaningfulText(text) {
@@ -236,20 +238,6 @@ function findCardTitle($, $card, href, sourceUrl) {
   return candidates[0] || '';
 }
 
-function getKnownOfferOverride(url) {
-  const normalized = String(url || '');
-  if (/\/product\/1103946075\/22597120770\b/i.test(normalized)) {
-    return {
-      title: 'Robô Aspirador Inteligente Branco/Preto - Limpeza Automática e Design Compacto',
-      price: 53.99,
-      priceText: 'R$ 53,99',
-      imageUrl: 'https://ofertaninja.com.br/wp-content/uploads/2025/11/br-11134207-7r98o-lo8epw1nrmbw14-1.jpg',
-      sourceUrl: 'https://ofertaninja.com.br/blog/2025/11/23/robo-aspirador-inteligente-branco-preto-limpeza-automatica-e-design-compacto-review-completo/'
-    };
-  }
-  return null;
-}
-
 function scoreTitleRelevance(title) {
   const normalized = normalizeText(title || '');
   let score = 0;
@@ -264,16 +252,6 @@ function scoreTitleRelevance(title) {
     if (normalized.includes(normalizedKw)) score -= 5;
   }
   return score;
-}
-
-function shouldAttemptReviewLookup(title, offer) {
-  const normalized = normalizeText(title || offer?.title || '');
-  if (!normalized) return false;
-  if (/^(ver oferta|pegar cupom|shopee|oferta)$/i.test(normalized)) return false;
-  if (/^(ver oferta|pegar cupom|shopee|oferta)/i.test(normalized) && normalized.split(' ').length <= 3) return false;
-  if (normalized.length < 12) return false;
-  if (offer?.price && offer?.imageUrl) return false;
-  return true;
 }
 
 async function expandSitemapUrls(sourceUrl, depth = 0) {
@@ -328,7 +306,6 @@ async function collectFromPublicPage(sourceUrl) {
   });
 
   const $ = cheerio.load(response.data);
-  const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
   const candidates = [];
 
   $('a[href]').each((_, element) => {
@@ -339,7 +316,7 @@ async function collectFromPublicPage(sourceUrl) {
     const $card = $(element).closest('article, li, div, section');
     const parentText = $card.text().replace(/\s+/g, ' ').trim();
     const title = cleanTitle($(element).attr('title') || $(element).text() || parentText);
-    const pageImage = pickBestImageForTitle($, title);
+    const pageImage = pickBestImageForTitle($, title, sourceUrl);
     const imageUrl = findBestCardImage($, $(element), sourceUrl, title) || pageImage;
     const cardPriceText = findCardPrice($, $card);
     const fallbackCardPriceText = cardPriceText || extractBestPriceText(parentText);
@@ -378,8 +355,8 @@ async function collectFromPublicPage(sourceUrl) {
       priceSource: item.priceSource || 'none',
       imageUrl: item.imageUrl || '',
       imageVerified: false,
-      imageSource: '',
-      imageConfidence: 0,
+      imageSource: item.imageUrl ? 'category_card_candidate' : '',
+      imageConfidence: item.imageUrl ? 50 : 0,
       rawText: item.text || '',
       cardText: item.cardText || '',
       sourceUrl,
@@ -387,7 +364,8 @@ async function collectFromPublicPage(sourceUrl) {
     });
   }
 
-  console.log(`[Coletor] Página ${sourceUrl}: ${offers.length} ofertas aproveitáveis.`);
+  const withImage = offers.filter((offer) => offer.imageUrl).length;
+  console.log(`[Coletor] Página ${sourceUrl}: ${offers.length} ofertas aproveitáveis. Com imagem de card: ${withImage}.`);
   return offers;
 }
 
