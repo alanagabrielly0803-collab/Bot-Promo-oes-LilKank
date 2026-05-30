@@ -103,24 +103,6 @@ function shouldUseCardScreenshot(rawCandidate) {
     Boolean(rawCandidate?.url);
 }
 
-function isTrustedImageSource(source) {
-  return [
-    'jsonld_product',
-    'og_image',
-    'og_image_secure_url',
-    'twitter_image',
-    'twitter_image_src',
-    'dom_srcset',
-    'dom_img',
-    'playwright_og_image',
-    'playwright_og_image_secure_url',
-    'playwright_twitter_image',
-    'playwright_twitter_image_src',
-    'playwright_srcset',
-    'playwright_dom_img'
-  ].includes(String(source || ''));
-}
-
 function isBadTitle(title) {
   const text = cleanText(title);
   if (!text) return true;
@@ -795,18 +777,10 @@ async function enrichAndValidateOffer(rawCandidate) {
     });
   }
 
-  const preferScreenshot = Boolean(
-    screenshotResult &&
-    (!imageResult.ok || !isTrustedImageSource(imageResult.source))
-  );
-
-  const finalImageUrl = preferScreenshot ? screenshotResult.image : imageResult.image;
-  const finalImageSource = preferScreenshot ? screenshotResult.source : imageResult.source;
-  const finalImageConfidence = preferScreenshot ? screenshotResult.confidence : imageResult.confidence;
-  const finalImageValidation = preferScreenshot
-    ? (screenshotResult.validation || null)
-    : (imageResult.validation || null);
-  const finalImageBuffer = preferScreenshot ? (screenshotResult?.image || null) : null;
+  const finalImageUrl = imageResult.image;
+  const finalImageSource = screenshotResult?.source || imageResult.source;
+  const finalImageConfidence = screenshotResult?.confidence || imageResult.confidence;
+  const finalImageValidation = screenshotResult?.validation || imageResult.validation || null;
 
   return {
     ok: true,
@@ -817,7 +791,7 @@ async function enrichAndValidateOffer(rawCandidate) {
       price: finalPriceValue,
       priceText,
       imageUrl: finalImageUrl,
-      imageBuffer: finalImageBuffer,
+      imageBuffer: screenshotResult?.image || null,
       imageContentType: finalImageValidation?.contentType || 'image/jpeg',
       imageVerified: true,
       imageSource: finalImageSource,
