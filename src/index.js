@@ -23,6 +23,49 @@ function buildTestOffer() {
   };
 }
 
+function getRequestApiKey(req) {
+  return String(
+    req.get('x-api-key') ||
+    req.query.api_key ||
+    req.body?.apiKey ||
+    ''
+  ).trim();
+}
+
+function requireApiKey(req, res, next) {
+  if (!config.apiKey) {
+    res.status(503).json({
+      ok: false,
+      error: 'api_key_not_configured',
+      message: 'Configure API_KEY no Render antes de usar endpoints POST.'
+    });
+    return;
+  }
+
+  if (getRequestApiKey(req) !== config.apiKey) {
+    res.status(401).json({ ok: false, error: 'unauthorized' });
+    return;
+  }
+
+  next();
+}
+
+function asyncRoute(handler) {
+  return async (req, res, next) => {
+    try {
+      await handler(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+function clampLimit(value, fallback = 1, max = 50) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
 async function runCollectAndPublish(limit = 1) {
   const collectResult = await runCollector();
   const publishResult = await publishNextOffers(limit);
@@ -45,20 +88,24 @@ async function startSchedulers() {
 
   if (config.autoStartCollector) {
     console.log(`[Scheduler] Coletor por categoria iniciado. Intervalo: ${config.discoveryIntervalMinutes} min.`);
-    await runCategoryCycle(5).catch((error) => console.error('[Scheduler] Erro inicial na coleta por categoria:', error.message));
+    runCategoryCycle(config.maxPostsPerRun).catch((error) => console.error('[Scheduler] Erro inicial na coleta por categoria:', error.message));
     cron.schedule(`*/${config.discoveryIntervalMinutes} * * * *`, () => {
-      runCategoryCycle(5).catch((error) => console.error('[Scheduler] Erro na coleta por categoria:', error.message));
+      runCategoryCycle(config.maxPostsPerRun).catch((error) => console.error('[Scheduler] Erro na coleta por categoria:', error.message));
     });
   }
 
   if (config.autoStartPublisher) {
     console.log(`[Scheduler] Publicador iniciado. Intervalo: ${config.postIntervalMinutes} min.`);
-    await publishNextOffers().catch((error) => console.error('[Scheduler] Erro inicial ao publicar:', error.message));
+    publishNextOffers().catch((error) => console.error('[Scheduler] Erro inicial ao publicar:', error.message));
     cron.schedule(`*/${config.postIntervalMinutes} * * * *`, () => {
       publishNextOffers().catch((error) => console.error('[Scheduler] Erro ao publicar:', error.message));
     });
   }
 }
+
+app.get('/', (req, res) => {
+  res.redirect(302, '/qr');
+});
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, stats: queueStats(), time: new Date().toISOString() });
@@ -153,8 +200,20 @@ app.get('/sync', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
-  res.json({ ok: true, config: { postIntervalMinutes: config.postIntervalMinutes, discoveryIntervalMinutes: config.discoveryIntervalMinutes }, stats: queueStats() });
+  res.json({
+    ok: true,
+    config: {
+      postIntervalMinutes: config.postIntervalMinutes,
+      discoveryIntervalMinutes: config.discoveryIntervalMinutes,
+      apiProtected: Boolean(config.apiKey),
+      schedulersStarted
+    },
+    whatsapp: getWhatsAppStatus(),
+    stats: queueStats()
+  });
 });
+
+app.use('/api', requireApiKey);
 
 app.post('/api/offers', (req, res) => {
   const body = req.body || {};
@@ -179,18 +238,16 @@ app.post('/api/offers', (req, res) => {
 
 app.post('/api/test-offer', (req, res) => {
   const result = enqueueOffers([buildTestOffer()]);
-
   res.json({ ok: true, message: 'Oferta de teste enfileirada.', ...result });
 });
 
-app.post('/api/test-send', async (req, res) => {
+app.post('/api/test-send', asyncRoute(async (req, res) => {
   const result = enqueueOffers([buildTestOffer()]);
-
   const publishResult = await publishNextOffers(1);
   res.json({ ok: true, message: 'Oferta de teste enfileirada e tentativa de envio realizada.', queue: result, publish: publishResult });
-});
+}));
 
-app.post('/api/test-launch', async (req, res) => {
+app.post('/api/test-launch', asyncRoute(async (req, res) => {
   const result = enqueueOffers([buildTestOffer()]);
   const publishResult = await publishNextOffers(1);
   res.json({
@@ -199,29 +256,31 @@ app.post('/api/test-launch', async (req, res) => {
     queue: result,
     publish: publishResult
   });
-});
+}));
 
-app.post('/api/collect-send', async (req, res) => {
-  const { collectResult, publishResult } = await runCollectAndPublish(1);
+app.post('/api/collect-send', asyncRoute(async (req, res) => {
+  const limit = clampLimit(req.body?.limit, 1, 20);
+  const { collectResult, publishResult } = await runCollectAndPublish(limit);
   res.json({
     ok: true,
     message: 'Coleta e envio executados.',
     collect: collectResult,
     publish: publishResult
   });
-});
+}));
 
-app.post('/api/collect-send-20', async (req, res) => {
-  const { collectResult, publishResult } = await runCategoryCollectAndPublish(5);
+app.post('/api/collect-send-20', asyncRoute(async (req, res) => {
+  const limit = clampLimit(req.body?.limit, 20, 50);
+  const { collectResult, publishResult } = await runCategoryCollectAndPublish(limit);
   res.json({
     ok: true,
-    message: 'Coleta por categoria e envio em blocos executados.',
+    message: `Coleta por categoria e envio em blocos de até ${limit} executados.`,
     collect: collectResult,
     publish: publishResult
   });
-});
+}));
 
-app.post('/api/collect-send-force', async (req, res) => {
+app.post('/api/collect-send-force', asyncRoute(async (req, res) => {
   const offers = await collectFromPublicPages();
   const offer = offers[0] || null;
 
@@ -243,21 +302,27 @@ app.post('/api/collect-send-force', async (req, res) => {
       url: offer.url
     }
   });
+}));
+
+app.use((error, req, res, next) => {
+  console.error('[HTTP] Erro na rota:', error.stack || error.message);
+  res.status(500).json({ ok: false, error: 'internal_error', message: error.message });
 });
 
 app.listen(config.port, () => {
   console.log(`[HTTP] Servidor rodando na porta ${config.port}.`);
-  console.log('[HTTP] Rotas: /health, /status, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
+  console.log('[HTTP] Rotas: /, /health, /qr, /status, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
 });
 
 async function bootstrap() {
   try {
-    await connectWhatsApp();
+    await connectWhatsApp(startSchedulers);
     const ready = await waitForWhatsAppReady(120000);
-    if (!ready) {
-      throw new Error('WhatsApp não ficou pronto a tempo.');
+    if (ready) {
+      await startSchedulers();
+      return;
     }
-    await startSchedulers();
+    console.warn('[Bootstrap] WhatsApp não ficou pronto em 120s. O servidor continua online e os agendadores iniciarão quando conectar.');
   } catch (error) {
     console.error('[Bootstrap] Falha na inicialização do WhatsApp:', error.message);
   }
