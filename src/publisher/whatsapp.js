@@ -6,6 +6,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const {
   default: makeWASocket,
+  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   useMultiFileAuthState
@@ -33,10 +34,15 @@ let pairingRequested = false;
 let pairingRefreshTimer = null;
 let reconnectTimer = null;
 let connectInFlight = false;
+let reconnectAttempts = 0;
+let lastPairingRequestAt = 0;
+let onOpenCallback = null;
 const groupMetadataCache = new Map();
 const GROUP_METADATA_TTL_MS = 5 * 60 * 1000;
-const PAIRING_CODE_TTL_MS = 90 * 1000;
-const PAIRING_REFRESH_INTERVAL_MS = 30 * 1000;
+const PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
+const PAIRING_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+const PAIRING_REQUEST_COOLDOWN_MS = 5 * 60 * 1000;
+const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000;
 
 function getSocketIdentityId() {
   const currentId = String(sock?.authState?.creds?.me?.id || '').trim();
@@ -94,7 +100,7 @@ async function resetAuthFolderIfNeeded() {
 
 function setCurrentQr(value) {
   currentQr.value = value || '';
-  currentQr.updatedAt = new Date().toISOString();
+  currentQr.updatedAt = value ? new Date().toISOString() : null;
 }
 
 function setCurrentPairingCode(value) {
@@ -137,6 +143,22 @@ function disposeCurrentSocket() {
   sock = undefined;
 }
 
+function isPairingOrQrFailure(reason) {
+  return /qr refs attempts ended|pair|pairing|408|timed out|timeout/i.test(String(reason || ''));
+}
+
+function getReconnectDelayMs(statusCode, reason = 'unknown') {
+  if (statusCode === DisconnectReason.connectionClosed) return 15000;
+
+  if (statusCode === 408 || isPairingOrQrFailure(reason)) {
+    const delay = Math.min(60000 * Math.max(1, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
+    return delay;
+  }
+
+  const delay = Math.min(10000 * Math.max(1, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
+  return delay;
+}
+
 function scheduleReconnect(statusCode, reason = 'unknown') {
   if (reconnectTimer) return;
 
@@ -151,9 +173,8 @@ function scheduleReconnect(statusCode, reason = 'unknown') {
     return;
   }
 
-  const delayMs = statusCode === DisconnectReason.connectionClosed
-    ? 15000
-    : 10000;
+  reconnectAttempts += 1;
+  const delayMs = getReconnectDelayMs(statusCode, reason);
 
   console.log(`[WhatsApp] Agendando reconexão em ${Math.round(delayMs / 1000)}s (${reason}).`);
   reconnectTimer = setTimeout(() => {
@@ -216,12 +237,27 @@ function canRequestPairingCode() {
   return ['pairing', 'both'].includes(config.whatsappLoginMethod);
 }
 
+function getBrowserConfig() {
+  if (canRequestPairingCode()) {
+    return Browsers?.macOS ? Browsers.macOS('Google Chrome') : ['Mac OS', 'Chrome', '14.4.1'];
+  }
+
+  return Browsers?.macOS ? Browsers.macOS('Desktop') : ['Mac OS', 'Desktop', '14.4.1'];
+}
+
 async function maybeRequestPairingCode(reason = 'manual') {
   if (!sock) return;
   if (!canRequestPairingCode()) return;
   if (sock.authState?.creds?.registered) return;
   if (pairingRequested) return;
   if (currentPairingCode.value && !isPairingCodeExpired()) return;
+
+  const now = Date.now();
+  if (lastPairingRequestAt && now - lastPairingRequestAt < PAIRING_REQUEST_COOLDOWN_MS) {
+    const remainingSeconds = Math.ceil((PAIRING_REQUEST_COOLDOWN_MS - (now - lastPairingRequestAt)) / 1000);
+    console.warn(`[WhatsApp] Aguardando cooldown para novo código de pareamento (${remainingSeconds}s restantes).`);
+    return;
+  }
 
   const phoneNumber = normalizePhoneNumber(config.whatsappPairingPhone);
   if (!phoneNumber) {
@@ -230,6 +266,7 @@ async function maybeRequestPairingCode(reason = 'manual') {
   }
 
   pairingRequested = true;
+  lastPairingRequestAt = now;
   try {
     console.log(`[WhatsApp] Solicitando código de pareamento (${reason})...`);
     const code = await sock.requestPairingCode(phoneNumber);
@@ -272,7 +309,11 @@ async function generateQrPng(value) {
   });
 }
 
-async function connectWhatsApp() {
+async function connectWhatsApp(openCallback = null) {
+  if (typeof openCallback === 'function') {
+    onOpenCallback = openCallback;
+  }
+
   if (connectInFlight) return sock;
   connectInFlight = true;
   clearReconnectTimer();
@@ -288,7 +329,8 @@ async function connectWhatsApp() {
       auth: state,
       logger: pino({ level: 'silent' }),
       version,
-      browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0'],
+      browser: getBrowserConfig(),
+      markOnlineOnConnect: false,
       cachedGroupMetadata: async (jid) => getCachedGroupMetadata(jid)
     });
 
@@ -296,6 +338,15 @@ async function connectWhatsApp() {
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
+
+      if (connection === 'connecting' && canRequestPairingCode()) {
+        setTimeout(() => {
+          maybeRequestPairingCode('connecting').catch((error) => {
+            console.error('[WhatsApp] Erro ao iniciar pareamento:', error.message);
+          });
+        }, 1500);
+      }
+
       if (qr) {
         connectionState = 'qr';
         setCurrentQr(qr);
@@ -327,6 +378,9 @@ async function connectWhatsApp() {
 
       if (connection === 'open') {
         connectionState = 'open';
+        reconnectAttempts = 0;
+        pairingRequested = false;
+        lastPairingRequestAt = 0;
         getSocketIdentityId();
         setCurrentQr('');
         currentQr.svg = '';
@@ -335,11 +389,15 @@ async function connectWhatsApp() {
         clearPairingRefreshTimer();
         clearReconnectTimer();
         console.log('[WhatsApp] Conectado com sucesso.');
+        if (onOpenCallback) {
+          await onOpenCallback().catch((error) => console.error('[WhatsApp] Erro ao iniciar agendadores após conexão:', error.message));
+        }
       }
 
       if (connection === 'close') {
         connectionState = 'close';
         const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const disconnectReason = lastDisconnect?.error?.message || 'close';
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         console.log('[WhatsApp] Conexão fechada.', `status=${statusCode || 'n/a'}.`, shouldReconnect ? 'Reconectando...' : 'Sessão encerrada.');
         if (lastDisconnect?.error) {
@@ -349,7 +407,7 @@ async function connectWhatsApp() {
         pairingRequested = false;
         setCurrentPairingCode('');
         if (shouldReconnect) {
-          scheduleReconnect(statusCode, lastDisconnect?.error?.message || 'close');
+          scheduleReconnect(statusCode, disconnectReason);
         }
       }
     });
@@ -398,7 +456,11 @@ function getWhatsAppStatus() {
     qrUpdatedAt: currentQr.updatedAt,
     pairingCode: currentPairingCode.value,
     pairingCodeUpdatedAt: currentPairingCode.updatedAt,
-    loginMethod: config.whatsappLoginMethod
+    loginMethod: config.whatsappLoginMethod,
+    reconnectAttempts,
+    pairingCooldownSeconds: lastPairingRequestAt
+      ? Math.max(0, Math.ceil((PAIRING_REQUEST_COOLDOWN_MS - (Date.now() - lastPairingRequestAt)) / 1000))
+      : 0
   };
 }
 
@@ -554,6 +616,9 @@ async function sendOfferDirect(targetJid, offer) {
   const normalizedOffer = await validateForPublish(offer);
   if (!normalizedOffer) return { sent: false, reason: 'validation_failed' };
   const result = await sendOffer(targetJid, normalizedOffer);
+  if (result.mode === 'error' || result.mode === 'skipped_no_verified_image') {
+    return { sent: false, ...result };
+  }
   return { sent: true, ...result };
 }
 
