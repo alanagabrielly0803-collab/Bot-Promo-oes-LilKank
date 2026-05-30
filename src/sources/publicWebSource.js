@@ -144,6 +144,9 @@ function scoreImageForTitle(image, titleTokens) {
   return score;
 }
 
+const MIN_CARD_IMAGE_SCORE = 6;
+const MIN_PAGE_IMAGE_SCORE = 6;
+
 function findBestCardImage($, $element, sourceUrl, title) {
   const titleTokens = normalizeText(title || '')
     .split(' ')
@@ -175,7 +178,7 @@ function findBestCardImage($, $element, sourceUrl, title) {
     current = current.parent();
   }
 
-  return best.score > 0 ? best.src : '';
+  return best.score >= MIN_CARD_IMAGE_SCORE ? best.src : '';
 }
 
 function pickBestImageForTitle($, title) {
@@ -197,7 +200,7 @@ function pickBestImageForTitle($, title) {
     .map((image) => ({ ...image, score: scoreImageForTitle(image, tokens) }))
     .sort((a, b) => b.score - a.score);
 
-  return ranked[0]?.score > 0 ? ranked[0].src : '';
+  return ranked[0]?.score >= MIN_PAGE_IMAGE_SCORE ? ranked[0].src : '';
 }
 
 function extractMeaningfulText(text) {
