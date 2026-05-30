@@ -179,7 +179,6 @@ async function connectWhatsApp() {
     auth: state,
     logger: pino({ level: 'silent' }),
     version,
-    printQRInTerminal: config.whatsappLoginMethod !== 'pairing',
     browser: ['Ofertas Casa Bot', 'Chrome', '1.0.0']
   });
 
@@ -202,8 +201,8 @@ async function connectWhatsApp() {
       if (pairingPageUrl) {
         console.log(`[WhatsApp] Abra o login do bot em: ${pairingPageUrl}`);
       }
-      if (config.whatsappLoginMethod !== 'pairing') {
-        console.log('[WhatsApp] Escaneie o QR Code abaixo:');
+      if (config.whatsappLoginMethod === 'qr') {
+        console.log('[WhatsApp] Escaneie o QR Code na página /qr.');
         qrcode.generate(qr, { small: true });
       }
       if (canRequestPairingCode()) {

@@ -79,6 +79,7 @@ app.get('/qr', (req, res) => {
       : showPairing
         ? 'Código de pareamento do WhatsApp'
       : 'Aguardando QR do WhatsApp';
+  const refreshSeconds = showQr ? 30 : 5;
 
   if (!showQr && !showPairing) {
     res.type('html').send(`<!doctype html>
@@ -117,7 +118,7 @@ app.get('/qr', (req, res) => {
     <html lang="pt-BR">
       <head>
         <meta charset="utf-8" />
-        <meta http-equiv="refresh" content="${status.connectionState === 'open' ? '30' : '5'}" />
+        <meta http-equiv="refresh" content="${status.connectionState === 'open' ? '30' : refreshSeconds}" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>${title}</title>
         <style>
@@ -135,9 +136,9 @@ app.get('/qr', (req, res) => {
       <body>
         <div class="card">
           <h1>${title}</h1>
-          <p class="muted">${showPairing ? 'Digite o código de pareamento no WhatsApp do celular.' : 'Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.'}</p>
+          <p class="muted">${showQr ? 'Abra este endereço no navegador e escaneie o QR com a câmera do WhatsApp.' : 'Abra este endereço no navegador e escaneie o QR pelo WhatsApp em <code>Aparelhos conectados</code>.'}</p>
           ${showQr ? `<div class="qr-wrap"><img alt="QR Code do WhatsApp" src="${qrSrc}" width="360" height="360" /></div>` : ''}
-          ${showPairing ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode || 'Aguardando código...'}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
+          ${!showQr && showPairing ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode || 'Aguardando código...'}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
           <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
           <p class="muted">Atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
           <p class="muted">Modo de login: ${status.loginMethod || 'qr'}</p>
