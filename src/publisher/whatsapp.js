@@ -140,11 +140,20 @@ function disposeCurrentSocket() {
 function scheduleReconnect(statusCode, reason = 'unknown') {
   if (reconnectTimer) return;
 
-  const delayMs = statusCode === DisconnectReason.connectionReplaced
+  const shouldReconnect = ![
+    DisconnectReason.loggedOut,
+    DisconnectReason.connectionReplaced,
+    DisconnectReason.multideviceMismatch
+  ].includes(statusCode);
+
+  if (!shouldReconnect) {
+    console.warn(`[WhatsApp] Reconexão automática desativada para status=${statusCode || 'n/a'} (${reason}). Limpe/repareie a sessão para continuar.`);
+    return;
+  }
+
+  const delayMs = statusCode === DisconnectReason.connectionClosed
     ? 15000
-    : statusCode === DisconnectReason.connectionClosed
-      ? 8000
-      : 10000;
+    : 10000;
 
   console.log(`[WhatsApp] Agendando reconexão em ${Math.round(delayMs / 1000)}s (${reason}).`);
   reconnectTimer = setTimeout(() => {
