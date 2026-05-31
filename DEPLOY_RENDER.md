@@ -1,6 +1,6 @@
 # Deploy no Render, Git e UptimeRobot
 
-Este diretório foi preparado para rodar o bot fora do ambiente local e subir como `web service` no Render.
+Este projeto roda como `web service` no Render, coleta ofertas públicas e publica em grupo do WhatsApp via Baileys.
 
 ## O que ficou pronto
 
@@ -8,7 +8,10 @@ Este diretório foi preparado para rodar o bot fora do ambiente local e subir co
 - `Procfile` para compatibilidade com deploy baseado em comando
 - `/.gitignore` para evitar subir dados locais, sessão do WhatsApp e `node_modules`
 - sessão e fila apontadas para `./storage/`
-- endpoint de saúde em `/health`
+- endpoint HTTP em `/health`
+- endpoint de prontidão real do WhatsApp em `/ready`
+- página de pareamento em `/qr`
+- reset seguro da sessão em `/api/whatsapp/reset-session`
 
 ## O que precisa existir no Render
 
@@ -23,20 +26,10 @@ No `render.yaml`, isso já foi configurado com um disco montado em:
 /opt/render/project/src/storage
 ```
 
-## Primeiro deploy
-
-1. Suba este diretório para um repositório Git.
-2. Conecte esse repositório ao Render.
-3. Garanta que o serviço use o `render.yaml`.
-4. No primeiro boot, confira os logs do Render e escaneie o QR Code do WhatsApp.
-5. Depois que a sessão ficar salva no disco, o bot passa a reconectar sem QR novo a cada deploy.
-
 ## Variáveis importantes no Render
 
-As variáveis principais já estão no `render.yaml`, mas vale conferir no painel:
-
 ```env
-WHATSAPP_GROUP_ID=
+WHATSAPP_GROUP_ID=120363426876382276@g.us
 WHATSAPP_LOGIN_METHOD=qr
 WHATSAPP_PAIRING_PHONE=
 RESET_WHATSAPP_AUTH_ON_START=false
@@ -44,31 +37,42 @@ WHATSAPP_AUTH_FOLDER=./storage/auth_publico
 DATA_DIR=./storage/data
 AUTO_START_COLLECTOR=true
 AUTO_START_PUBLISHER=false
+AUTO_PUBLISH_AFTER_COLLECT=true
 REQUIRE_VERIFIED_IMAGE=true
 ALLOW_UNTRUSTED_IMAGE_TESTING=true
-PLAYWRIGHT_IMAGE_FALLBACK=true
+PLAYWRIGHT_IMAGE_FALLBACK=false
 PUBLISH_ONLY_VALIDATED=true
 ```
 
-## UptimeRobot
+Opcional, mas recomendado para proteger a página de pareamento:
 
-Configure um monitor HTTP apontando para:
-
-```txt
-/health
+```env
+QR_PAGE_TOKEN=uma_senha_forte_aqui
 ```
 
-Exemplo:
+Se `QR_PAGE_TOKEN` estiver configurado, abra o QR assim:
+
+```txt
+https://SEU-SERVICO.onrender.com/qr?token=uma_senha_forte_aqui
+```
+
+## Health check e prontidão
+
+Use `/health` para o Render/UptimeRobot verificar se o servidor HTTP está no ar:
 
 ```txt
 https://SEU-SERVICO.onrender.com/health
 ```
 
-O endpoint retorna `200` quando o servidor HTTP está no ar.
+Use `/ready` para saber se o WhatsApp está realmente conectado e pronto para publicar:
+
+```txt
+https://SEU-SERVICO.onrender.com/ready
+```
+
+`/ready` retorna HTTP 503 quando o WhatsApp não está pronto. Não use `/ready` como health check do Render, porque o Render poderia reiniciar o serviço enquanto você ainda está apenas aguardando QR.
 
 ## Login do WhatsApp no Render
-
-Para evitar QR deformado no log do Render, o modo recomendado é `qr`.
 
 Abra:
 
@@ -76,8 +80,13 @@ Abra:
 https://SEU-SERVICO.onrender.com/qr
 ```
 
-Essa página mostra o QR em imagem e atualiza automaticamente até o WhatsApp conectar.
-Se você mudar `WHATSAPP_LOGIN_METHOD` para `pairing` ou `both`, ela também mostra o código de pareamento.
+ou, se configurou `QR_PAGE_TOKEN`:
+
+```txt
+https://SEU-SERVICO.onrender.com/qr?token=SEU_TOKEN
+```
+
+A página mostra o QR em imagem e atualiza automaticamente até o WhatsApp conectar. Se você mudar `WHATSAPP_LOGIN_METHOD` para `pairing` ou `both`, ela também mostra o código de pareamento.
 
 ## Modos de login
 
@@ -85,24 +94,40 @@ Se você mudar `WHATSAPP_LOGIN_METHOD` para `pairing` ou `both`, ela também mos
 - `pairing`: mostra só o código de pareamento na página `/qr`
 - `both`: mostra QR e tenta gerar o código de pareamento ao mesmo tempo
 
-Se você quiser usar `pairing` ou `both`, preencha `WHATSAPP_PAIRING_PHONE` com o número no formato internacional, só dígitos.
+Se quiser usar `pairing` ou `both`, preencha `WHATSAPP_PAIRING_PHONE` com o número no formato internacional, só dígitos.
 
-## Forçar novo pareamento
+## Corrigir Bad MAC, MessageCounterError ou QR inválido
 
-Se o Render ficar preso em uma sessão antiga ou der erro ao sincronizar com o código, coloque:
+Esses erros normalmente indicam sessão Baileys/Signal fora de sincronia, duplicada ou corrompida.
 
-```env
-RESET_WHATSAPP_AUTH_ON_START=true
+1. No celular do WhatsApp do bot, abra `Aparelhos conectados`.
+2. Remova sessões antigas do bot, Render ou computador local.
+3. Chame a rota de reset:
+
+```txt
+https://SEU-SERVICO.onrender.com/api/whatsapp/reset-session?confirm=RESET&api_key=SUA_API_KEY
 ```
 
-Faça um deploy uma vez, complete o pareamento, e depois volte para `false`.
+4. Aguarde o Render reiniciar o serviço.
+5. Abra `/qr` e escaneie de novo.
+
+Não rode o mesmo número do bot no Render e no computador local ao mesmo tempo.
+
+## Playwright
+
+`PLAYWRIGHT_IMAGE_FALLBACK` fica `false` no Render para evitar peso de Chromium e reduzir reinícios por consumo de recurso.
+
+Se um dia quiser reativar no Render:
+
+1. Configure `PLAYWRIGHT_IMAGE_FALLBACK=true`.
+2. Rode build com Chromium instalado usando `npm run install:playwright` ou ajuste o buildCommand.
+3. Monitore memória e tempo de build.
 
 ## Git
 
 Fluxo sugerido:
 
 ```bash
-git init
 git add .
 git commit -m "Prepare Render deployment"
 ```
@@ -112,5 +137,5 @@ Depois, conecte esse repositório ao GitHub e ao Render.
 ## Observações
 
 - O Render usa filesystem efêmero por padrão, então sem disco persistente a sessão do WhatsApp e a fila seriam perdidas em cada deploy.
-- O `PLAYWRIGHT_IMAGE_FALLBACK` ficou desligado no Render para evitar download pesado de navegador no build.
-- Se você quiser reativar a imagem por Playwright no Render, será preciso revisar o build e a instalação do Chromium.
+- Deixe apenas um ambiente ativo usando o mesmo número do WhatsApp.
+- Se o bot enviar muitas ofertas de uma vez, reduza `MAX_POSTS_PER_RUN`.
