@@ -34,7 +34,7 @@ function loadSkipped() {
 }
 
 function saveSkipped(items) {
-  writeJson(SKIPPED_FILE, []);
+  writeJson(SKIPPED_FILE, items);
 }
 
 function normalizeOfferUrl(url) {
