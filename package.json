@@ -8,8 +8,8 @@
     "dev": "nodemon src/index.js",
     "collect": "node src/collectorRunner.js",
     "test:message": "node src/testMessage.js",
-    "postinstall": "playwright install chromium",
-    "check": "node --check src/index.js && node --check src/sources/publicWebSource.js && node --check src/sources/rssSource.js && node --check src/sources/offerExtractor.js && node --check src/publisher/whatsapp.js"
+    "install:playwright": "playwright install chromium",
+    "check": "node --check src/index.js && node --check src/collectorRunner.js && node --check src/sources/publicWebSource.js && node --check src/sources/rssSource.js && node --check src/sources/offerExtractor.js && node --check src/publisher/whatsapp.js && node --check src/queue/offerQueue.js && node --check src/config.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.18",
