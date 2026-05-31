@@ -26,6 +26,8 @@ services:
         value: qr
       - key: WHATSAPP_PAIRING_PHONE
         sync: false
+      - key: QR_PAGE_TOKEN
+        sync: false
       - key: RESET_WHATSAPP_AUTH_ON_START
         value: false
       - key: SEND_PRODUCT_IMAGE
@@ -51,7 +53,7 @@ services:
       - key: IMAGE_REQUIRE_VALID_HTTP
         value: true
       - key: PLAYWRIGHT_IMAGE_FALLBACK
-        value: true
+        value: false
       - key: PLAYWRIGHT_TIMEOUT_MS
         value: 30000
       - key: PUBLISH_ONLY_VALIDATED
@@ -59,6 +61,8 @@ services:
       - key: AUTO_START_PUBLISHER
         value: false
       - key: AUTO_START_COLLECTOR
+        value: true
+      - key: AUTO_PUBLISH_AFTER_COLLECT
         value: true
       - key: SEED_TEST_OFFER_ON_START
         value: false
