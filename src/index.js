@@ -1,10 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-const cron = require('node-cron');
 const fs = require('fs/promises');
 const path = require('path');
 const config = require('./config');
-const { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus, waitForWhatsAppReady } = require('./publisher/whatsapp');
+const { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus, waitForWhatsAppReady, isWhatsAppReady } = require('./publisher/whatsapp');
 const { runCollector, runCategoryCycle } = require('./collectorRunner');
 const { collectFromPublicPages } = require('./sources/publicWebSource');
 const { queueStats, enqueueOffers } = require('./queue/offerQueue');
@@ -12,6 +11,7 @@ const { queueStats, enqueueOffers } = require('./queue/offerQueue');
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 let schedulersStarted = false;
+const scheduledTasks = [];
 
 function buildTestOffer() {
   const nonce = Date.now();
@@ -52,6 +52,16 @@ function requireApiKey(req, res, next) {
   next();
 }
 
+function requireQrToken(req, res, next) {
+  if (!config.qrPageToken) return next();
+  const token = String(req.query.token || req.get('x-qr-token') || '').trim();
+  if (token !== config.qrPageToken) {
+    res.status(401).type('html').send('<h1>QR protegido</h1><p>Token inválido ou ausente.</p>');
+    return;
+  }
+  next();
+}
+
 function asyncRoute(handler) {
   return async (req, res, next) => {
     try {
@@ -66,6 +76,35 @@ function clampLimit(value, fallback = 1, max = 50) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(Math.floor(n), max);
+}
+
+function intervalMs(minutes, fallbackMinutes = 60) {
+  const value = Number(minutes);
+  const safeMinutes = Number.isFinite(value) && value > 0 ? value : fallbackMinutes;
+  return Math.max(60 * 1000, Math.floor(safeMinutes * 60 * 1000));
+}
+
+function startIntervalTask(name, everyMs, task) {
+  let running = false;
+  const run = async () => {
+    if (running) {
+      console.warn(`[Scheduler] ${name} ignorado porque a execução anterior ainda está ativa.`);
+      return;
+    }
+    running = true;
+    try {
+      await task();
+    } catch (error) {
+      console.error(`[Scheduler] Erro em ${name}:`, error.stack || error.message);
+    } finally {
+      running = false;
+    }
+  };
+
+  run();
+  const timer = setInterval(run, everyMs);
+  timer.unref?.();
+  scheduledTasks.push({ name, everyMs, timer });
 }
 
 async function pathExists(targetPath) {
@@ -170,7 +209,10 @@ async function runCollectAndPublish(limit = 1) {
 }
 
 async function runCategoryCollectAndPublish(limit = 5) {
-  const collectResult = await runCategoryCycle(limit);
+  const collectResult = await runCategoryCycle(limit, {
+    publishAfterCollect: true,
+    maxTotalPosts: limit
+  });
   return { collectResult, publishResult: { sent: collectResult.sent || 0 } };
 }
 
@@ -184,31 +226,48 @@ async function startSchedulers() {
   }
 
   if (config.autoStartCollector) {
-    console.log(`[Scheduler] Coletor por categoria iniciado. Intervalo: ${config.discoveryIntervalMinutes} min.`);
-    runCategoryCycle(config.maxPostsPerRun).catch((error) => console.error('[Scheduler] Erro inicial na coleta por categoria:', error.message));
-    cron.schedule(`*/${config.discoveryIntervalMinutes} * * * *`, () => {
-      runCategoryCycle(config.maxPostsPerRun).catch((error) => console.error('[Scheduler] Erro na coleta por categoria:', error.message));
-    });
+    const delay = intervalMs(config.discoveryIntervalMinutes, 180);
+    console.log(`[Scheduler] Coletor por categoria iniciado. Intervalo real: ${Math.round(delay / 60000)} min. Publicar após coleta: ${config.autoPublishAfterCollect ? 'sim' : 'não'}.`);
+    startIntervalTask('coleta_por_categoria', delay, () => runCategoryCycle(config.maxPostsPerRun, {
+      publishAfterCollect: config.autoPublishAfterCollect,
+      maxTotalPosts: config.maxPostsPerRun
+    }));
   }
 
   if (config.autoStartPublisher) {
-    console.log(`[Scheduler] Publicador iniciado. Intervalo: ${config.postIntervalMinutes} min.`);
-    publishNextOffers().catch((error) => console.error('[Scheduler] Erro inicial ao publicar:', error.message));
-    cron.schedule(`*/${config.postIntervalMinutes} * * * *`, () => {
-      publishNextOffers().catch((error) => console.error('[Scheduler] Erro ao publicar:', error.message));
-    });
+    const delay = intervalMs(config.postIntervalMinutes, 60);
+    console.log(`[Scheduler] Publicador iniciado. Intervalo real: ${Math.round(delay / 60000)} min.`);
+    startIntervalTask('publicador', delay, () => publishNextOffers(config.maxPostsPerRun));
   }
 }
 
 app.get('/', (req, res) => {
-  res.redirect(302, '/qr');
+  res.redirect(302, config.qrPageToken ? `/qr?token=${encodeURIComponent(config.qrPageToken)}` : '/qr');
 });
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, stats: queueStats(), time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: 'http_alive',
+    whatsappReady: isWhatsAppReady(),
+    whatsapp: getWhatsAppStatus(),
+    stats: queueStats(),
+    time: new Date().toISOString()
+  });
 });
 
-app.get('/qr', (req, res) => {
+app.get('/ready', (req, res) => {
+  const ready = isWhatsAppReady();
+  res.status(ready ? 200 : 503).json({
+    ok: ready,
+    service: 'whatsapp_ready',
+    whatsapp: getWhatsAppStatus(),
+    stats: queueStats(),
+    time: new Date().toISOString()
+  });
+});
+
+app.get('/qr', requireQrToken, (req, res) => {
   res.set({
     'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
     Pragma: 'no-cache',
@@ -229,42 +288,14 @@ app.get('/qr', (req, res) => {
       ? 'Escaneie o QR do WhatsApp'
       : showPairing
         ? 'Código de pareamento do WhatsApp'
-      : 'Aguardando QR do WhatsApp';
+        : 'Aguardando QR do WhatsApp';
   const refreshSeconds = showQr ? 5 : 3;
 
-  if (!showQr && !showPairing) {
-    res.type('html').send(`<!doctype html>
-      <html lang="pt-BR">
-        <head>
-          <meta charset="utf-8" />
-          <meta http-equiv="refresh" content="3" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>${title}</title>
-          <style>
-            body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 24px; }
-            .card { max-width: 640px; width: 100%; background: #111827; border: 1px solid #334155; border-radius: 16px; padding: 24px; box-shadow: 0 12px 30px rgba(0,0,0,.35); }
-            code, pre { white-space: pre-wrap; word-break: break-word; }
-            .muted { color: #94a3b8; }
-            .pair-wrap { margin-top: 16px; background: #0b1120; border: 1px solid #334155; border-radius: 12px; padding: 16px 18px; }
-            .pair-code { font-size: 2rem; letter-spacing: 0.25em; font-weight: 700; color: #f8fafc; word-break: break-word; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <h1>${title}</h1>
-            <p class="muted">Esta página atualiza automaticamente a cada 3 segundos.</p>
-            <p>Se o QR ainda não apareceu, aguarde o WhatsApp gerar uma sessão nova no Render.</p>
-            <p>Status atual: <strong>${status.connectionState}</strong></p>
-            <p>Atualizado em: <strong>${status.qrUpdatedAt || 'ainda não'}</strong></p>
-            <p>Modo de login: <strong>${status.loginMethod || 'qr'}</strong></p>
-            ${pairingCode ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
-          </div>
-        </body>
-      </html>`);
-    return;
-  }
-
   const qrSrc = png || (svg ? `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}` : '');
+  const lastDisconnect = status.lastDisconnect
+    ? `<p class="muted">Última queda: <code>${status.lastDisconnect.reason}</code> em ${status.lastDisconnect.at}</p>`
+    : '';
+
   res.type('html').send(`<!doctype html>
     <html lang="pt-BR">
       <head>
@@ -288,21 +319,22 @@ app.get('/qr', (req, res) => {
       <body>
         <div class="card">
           <h1>${title}</h1>
-          <p class="muted">Abra o WhatsApp em <code>Aparelhos conectados</code> e escaneie o QR. Esta página atualiza a cada <strong>${refreshSeconds}s</strong> para evitar QR expirado.</p>
+          <p class="muted">Abra o WhatsApp em <code>Aparelhos conectados</code> e escaneie o QR. Esta página atualiza automaticamente.</p>
           ${showQr ? `<div class="qr-wrap"><img alt="QR Code do WhatsApp" src="${qrSrc}" width="360" height="360" /></div>` : ''}
           ${!showQr && showPairing ? `<div class="pair-wrap"><div class="muted">Código de pareamento</div><div class="pair-code">${pairingCode || 'Aguardando código...'}</div><div class="muted">Digite esse código no WhatsApp do celular.</div></div>` : ''}
-          ${pairingCode ? `<div class="pair-wrap"><div class="muted">Código de pareamento alternativo</div><div class="pair-code">${pairingCode}</div><div class="muted">Use se o QR continuar inválido.</div></div>` : ''}
-          <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : ''}">${status.connectionState}</strong></p>
-          <p class="muted">QR gerado/atualizado em: ${status.qrUpdatedAt || 'ainda não'}</p>
+          ${pairingCode && showQr ? `<div class="pair-wrap"><div class="muted">Código de pareamento alternativo</div><div class="pair-code">${pairingCode}</div><div class="muted">Use se o QR continuar inválido.</div></div>` : ''}
+          <p>Status atual: <strong class="${status.connectionState === 'open' ? 'ok' : 'warn'}">${status.connectionState}</strong></p>
+          <p class="muted">Reconexões: ${status.reconnectAttempts || 0}</p>
+          ${lastDisconnect}
           <p class="muted">Modo de login: ${status.loginMethod || 'qr'}</p>
-          <p class="warn">Se o WhatsApp disser inválido, aguarde a página atualizar e escaneie o QR novo.</p>
+          <p class="warn">Se aparecer Bad MAC, MessageCounterError ou QR inválido, remova aparelhos antigos no WhatsApp e use o reset de sessão.</p>
         </div>
       </body>
     </html>`);
 });
 
 app.get('/sync', (req, res) => {
-  res.redirect(302, '/qr');
+  res.redirect(302, config.qrPageToken ? `/qr?token=${encodeURIComponent(config.qrPageToken)}` : '/qr');
 });
 
 app.get('/status', (req, res) => {
@@ -311,8 +343,13 @@ app.get('/status', (req, res) => {
     config: {
       postIntervalMinutes: config.postIntervalMinutes,
       discoveryIntervalMinutes: config.discoveryIntervalMinutes,
+      autoStartCollector: config.autoStartCollector,
+      autoStartPublisher: config.autoStartPublisher,
+      autoPublishAfterCollect: config.autoPublishAfterCollect,
       apiProtected: Boolean(config.apiKey),
-      schedulersStarted
+      qrProtected: Boolean(config.qrPageToken),
+      schedulersStarted,
+      scheduledTasks: scheduledTasks.map((task) => ({ name: task.name, everyMs: task.everyMs }))
     },
     whatsapp: getWhatsAppStatus(),
     stats: queueStats()
@@ -426,7 +463,7 @@ app.post('/api/collect-send-20', asyncRoute(async (req, res) => {
   const { collectResult, publishResult } = await runCategoryCollectAndPublish(limit);
   res.json({
     ok: true,
-    message: `Coleta por categoria e envio em blocos de até ${limit} executados.`,
+    message: `Coleta por categoria e envio com limite total de até ${limit} executados.`,
     collect: collectResult,
     publish: publishResult
   });
@@ -463,7 +500,7 @@ app.use((error, req, res, next) => {
 
 app.listen(config.port, () => {
   console.log(`[HTTP] Servidor rodando na porta ${config.port}.`);
-  console.log('[HTTP] Rotas: /, /health, /qr, /status, GET /api/storage-status, GET/POST /api/whatsapp/reset-session, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
+  console.log('[HTTP] Rotas: /, /health, /ready, /qr, /status, GET /api/storage-status, GET/POST /api/whatsapp/reset-session, POST /api/offers, POST /api/test-offer, POST /api/test-send, POST /api/test-launch, POST /api/collect-send, POST /api/collect-send-20, POST /api/collect-send-force');
 });
 
 async function bootstrap() {
