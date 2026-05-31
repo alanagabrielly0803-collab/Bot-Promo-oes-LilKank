@@ -13,7 +13,7 @@ const {
 } = require('@whiskeysockets/baileys');
 const config = require('../config');
 const { buildOfferMessage } = require('./messageBuilder');
-const { getPendingOffers, markSent, markSkipped, markImageReviewFailed, queueStats, loadQueue } = require('../queue/offerQueue');
+const { getPendingOffers, markSent, markImageReviewFailed, queueStats, loadQueue } = require('../queue/offerQueue');
 const { runCollector } = require('../collectorRunner');
 const { enrichAndValidateOffer, closePlaywrightBrowser } = require('../services/productQualityGate');
 
@@ -36,6 +36,7 @@ let reconnectTimer = null;
 let connectInFlight = false;
 let reconnectAttempts = 0;
 let lastPairingRequestAt = 0;
+let lastDisconnectInfo = null;
 let onOpenCallback = null;
 const groupMetadataCache = new Map();
 const GROUP_METADATA_TTL_MS = 5 * 60 * 1000;
@@ -60,11 +61,30 @@ function getSocketIdentityId() {
   return '';
 }
 
+function isWhatsAppReady() {
+  return connectionState === 'open' && Boolean(sock) && Boolean(getSocketIdentityId());
+}
+
+function errorText(error) {
+  return String(error?.message || error?.stack || error || '');
+}
+
+function isConnectionClosedError(error) {
+  return /connection closed|stream errored|timed out|timeout|socket|not open|closed|restart required/i.test(errorText(error));
+}
+
+function isCryptoSessionError(error) {
+  return /bad mac|messagecountererror|key used already|never filled|failed to decrypt|decryptwithsessions|session_cipher|libsignal|prekey bundle/i.test(errorText(error));
+}
+
+function shouldStopPublishOnError(error) {
+  return isConnectionClosedError(error) || isCryptoSessionError(error);
+}
+
 async function waitForWhatsAppReady(timeoutMs = 120000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const ready = connectionState === 'open' && getSocketIdentityId();
-    if (ready) return true;
+    if (isWhatsAppReady()) return true;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
@@ -82,7 +102,9 @@ function getPublicBaseUrl() {
 
 function getPairingPageUrl() {
   const baseUrl = getPublicBaseUrl();
-  return baseUrl ? `${baseUrl}/qr` : '';
+  if (!baseUrl) return '';
+  const token = config.qrPageToken ? `?token=${encodeURIComponent(config.qrPageToken)}` : '';
+  return `${baseUrl}/qr${token}`;
 }
 
 async function resetAuthFolderIfNeeded() {
@@ -143,20 +165,28 @@ function disposeCurrentSocket() {
   sock = undefined;
 }
 
+function recordDisconnect(statusCode, reason = 'unknown') {
+  lastDisconnectInfo = {
+    statusCode: statusCode || null,
+    reason: String(reason || 'unknown'),
+    at: new Date().toISOString(),
+    reconnectAttempts
+  };
+}
+
 function isPairingOrQrFailure(reason) {
   return /qr refs attempts ended|pair|pairing|408|timed out|timeout/i.test(String(reason || ''));
 }
 
 function getReconnectDelayMs(statusCode, reason = 'unknown') {
   if (statusCode === DisconnectReason.connectionClosed) return 15000;
+  if (statusCode === 500 || /stream errored|ack|bad mac|messagecountererror/i.test(String(reason || ''))) return 30000;
 
   if (statusCode === 408 || isPairingOrQrFailure(reason)) {
-    const delay = Math.min(60000 * Math.max(1, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
-    return delay;
+    return Math.min(60000 * Math.max(1, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
   }
 
-  const delay = Math.min(10000 * Math.max(1, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
-  return delay;
+  return Math.min(10000 * Math.max(1, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
 }
 
 function scheduleReconnect(statusCode, reason = 'unknown') {
@@ -169,6 +199,7 @@ function scheduleReconnect(statusCode, reason = 'unknown') {
   ].includes(statusCode);
 
   if (!shouldReconnect) {
+    recordDisconnect(statusCode, reason);
     console.warn(`[WhatsApp] Reconexão automática desativada para status=${statusCode || 'n/a'} (${reason}). Limpe/repareie a sessão para continuar.`);
     return;
   }
@@ -185,6 +216,7 @@ function scheduleReconnect(statusCode, reason = 'unknown') {
     }
     connectWhatsApp().catch((error) => {
       console.error('[WhatsApp] Falha ao reconectar:', error.message);
+      scheduleReconnect(statusCode, error.message);
     });
   }, delayMs);
   reconnectTimer.unref?.();
@@ -331,7 +363,9 @@ async function connectWhatsApp(openCallback = null) {
       version,
       browser: getBrowserConfig(),
       markOnlineOnConnect: false,
-      cachedGroupMetadata: async (jid) => getCachedGroupMetadata(jid)
+      cachedGroupMetadata: async (jid) => getCachedGroupMetadata(jid),
+      syncFullHistory: false,
+      shouldSyncHistoryMessage: () => false
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -381,6 +415,7 @@ async function connectWhatsApp(openCallback = null) {
         reconnectAttempts = 0;
         pairingRequested = false;
         lastPairingRequestAt = 0;
+        lastDisconnectInfo = null;
         getSocketIdentityId();
         setCurrentQr('');
         currentQr.svg = '';
@@ -399,6 +434,7 @@ async function connectWhatsApp(openCallback = null) {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const disconnectReason = lastDisconnect?.error?.message || 'close';
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        recordDisconnect(statusCode, disconnectReason);
         console.log('[WhatsApp] Conexão fechada.', `status=${statusCode || 'n/a'}.`, shouldReconnect ? 'Reconectando...' : 'Sessão encerrada.');
         if (lastDisconnect?.error) {
           console.error('[WhatsApp] Erro de desconexão:', lastDisconnect.error.message || lastDisconnect.error);
@@ -415,11 +451,19 @@ async function connectWhatsApp(openCallback = null) {
     sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const msg of messages || []) {
         if (!msg.message || msg.key.fromMe) continue;
-        await handleCommand(msg).catch((error) => console.error('[WhatsApp] Erro em comando:', error.message));
+        await handleCommand(msg).catch((error) => {
+          console.error('[WhatsApp] Erro em comando:', error.message);
+          if (shouldStopPublishOnError(error)) {
+            connectionState = 'close';
+            recordDisconnect(null, error.message);
+            scheduleReconnect(null, error.message);
+          }
+        });
       }
     });
 
     sock.ev.on('groups.update', async (events = []) => {
+      if (!isWhatsAppReady()) return;
       for (const event of events) {
         if (!event?.id) continue;
         try {
@@ -432,7 +476,7 @@ async function connectWhatsApp(openCallback = null) {
     });
 
     sock.ev.on('group-participants.update', async (event) => {
-      if (!event?.id) return;
+      if (!isWhatsAppReady() || !event?.id) return;
       try {
         const metadata = await sock.groupMetadata(event.id);
         setCachedGroupMetadata(event.id, metadata);
@@ -450,6 +494,7 @@ async function connectWhatsApp(openCallback = null) {
 function getWhatsAppStatus() {
   return {
     connectionState,
+    ready: isWhatsAppReady(),
     qr: currentQr.value,
     qrSvg: currentQr.svg,
     qrPng: currentQr.png,
@@ -458,6 +503,7 @@ function getWhatsAppStatus() {
     pairingCodeUpdatedAt: currentPairingCode.updatedAt,
     loginMethod: config.whatsappLoginMethod,
     reconnectAttempts,
+    lastDisconnect: lastDisconnectInfo,
     pairingCooldownSeconds: lastPairingRequestAt
       ? Math.max(0, Math.ceil((PAIRING_REQUEST_COOLDOWN_MS - (Date.now() - lastPairingRequestAt)) / 1000))
       : 0
@@ -472,6 +518,7 @@ function getMessageText(msg) {
 }
 
 async function reply(jid, text) {
+  if (!isWhatsAppReady()) throw new Error('whatsapp_not_ready');
   await sock.sendMessage(jid, { text });
 }
 
@@ -484,7 +531,7 @@ async function handleCommand(msg) {
 
   if (command === '/status') {
     const stats = queueStats();
-    await reply(jid, `Status: ${paused ? 'pausado' : 'ativo'}\nFila: ${stats.pending}\nProntas: ${stats.readyToPublish || 0}\nRevisão imagem: ${stats.pendingImageReview || 0}\nFalha imagem: ${stats.imageReviewFailed || 0}\nEnviadas: ${stats.sent}\nGrupo alvo: ${config.whatsappGroupId || 'não configurado'}`);
+    await reply(jid, `Status: ${paused ? 'pausado' : 'ativo'}\nWhatsApp: ${connectionState}\nFila: ${stats.pending}\nProntas: ${stats.readyToPublish || 0}\nRevisão imagem: ${stats.pendingImageReview || 0}\nFalha imagem: ${stats.imageReviewFailed || 0}\nEnviadas: ${stats.sent}\nGrupo alvo: ${config.whatsappGroupId || 'não configurado'}`);
     return;
   }
 
@@ -519,11 +566,15 @@ async function handleCommand(msg) {
 
   if (command === '/postar' || command === '/testeoferta') {
     const result = await publishNextOffers(1, jid);
-    await reply(jid, `Postagem manual finalizada. Enviadas: ${result.sent}.`);
+    await reply(jid, `Postagem manual finalizada. Enviadas: ${result.sent}. Motivo: ${result.reason || 'ok'}.`);
     return;
   }
 
   if (command === '/grupos') {
+    if (!isWhatsAppReady()) {
+      await reply(jid, 'WhatsApp ainda não está pronto. Aguarde reconectar e tente de novo.');
+      return;
+    }
     const groups = await sock.groupFetchAllParticipating();
     const lines = Object.values(groups).map((g) => `${g.subject}\n${g.id}`);
     await reply(jid, lines.length ? lines.join('\n\n') : 'Nenhum grupo encontrado.');
@@ -532,7 +583,6 @@ async function handleCommand(msg) {
 
   if (command === '/fontes') {
     await reply(jid, `Fontes HTML:\n${config.publicSourceUrls.join('\n') || 'nenhuma'}\n\nFeeds RSS:\n${config.rssSourceUrls.join('\n') || 'nenhum'}`);
-    return;
   }
 }
 
@@ -541,8 +591,8 @@ async function sendOffer(targetJid, offer) {
   if (!normalizedTargetJid) {
     return { mode: 'error', reason: 'missing_group_id' };
   }
-  if (!getSocketIdentityId()) {
-    return { mode: 'error', reason: 'missing_whatsapp_identity' };
+  if (!isWhatsAppReady()) {
+    return { mode: 'error', reason: 'whatsapp_not_ready', state: connectionState };
   }
 
   const caption = buildOfferMessage(offer);
@@ -553,6 +603,7 @@ async function sendOffer(targetJid, offer) {
 
   if (config.sendProductImage && (offer.imageBuffer || offer.imageUrl)) {
     try {
+      if (!isWhatsAppReady()) throw new Error('whatsapp_not_ready');
       if (offer.imageBuffer) {
         await sock.sendMessage(normalizedTargetJid, {
           image: offer.imageBuffer,
@@ -578,6 +629,7 @@ async function sendOffer(targetJid, offer) {
           throw new Error(`download_image_http_${imageResponse.status}`);
         }
 
+        if (!isWhatsAppReady()) throw new Error('whatsapp_not_ready');
         await sock.sendMessage(normalizedTargetJid, {
           image: Buffer.from(imageResponse.data),
           caption,
@@ -587,6 +639,9 @@ async function sendOffer(targetJid, offer) {
       return { mode: 'image' };
     } catch (error) {
       console.warn('[WhatsApp] Falha ao enviar imagem.', error.message);
+      if (shouldStopPublishOnError(error)) {
+        throw error;
+      }
       if (config.requireVerifiedImage && !config.allowUntrustedImageTesting) {
         return { mode: 'skipped_no_verified_image', reason: 'image_download_failed' };
       }
@@ -597,6 +652,9 @@ async function sendOffer(targetJid, offer) {
     return { mode: 'skipped_no_verified_image', reason: 'missing_verified_image' };
   }
 
+  if (!isWhatsAppReady()) {
+    return { mode: 'error', reason: 'whatsapp_not_ready', state: connectionState };
+  }
   await sock.sendMessage(normalizedTargetJid, { text: caption });
   return { mode: 'text' };
 }
@@ -614,9 +672,9 @@ async function validateForPublish(offer) {
 }
 
 async function sendOfferDirect(targetJid, offer) {
-  if (!sock) return { sent: false, reason: 'whatsapp_not_connected' };
+  const ready = await waitForWhatsAppReady(10000);
+  if (!ready || !isWhatsAppReady()) return { sent: false, reason: 'whatsapp_not_ready', state: connectionState };
   if (!targetJid) return { sent: false, reason: 'missing_group_id' };
-  if (!getSocketIdentityId()) return { sent: false, reason: 'missing_whatsapp_identity' };
   const normalizedOffer = await validateForPublish(offer);
   if (!normalizedOffer) return { sent: false, reason: 'validation_failed' };
   const result = await sendOffer(targetJid, normalizedOffer);
@@ -627,9 +685,12 @@ async function sendOfferDirect(targetJid, offer) {
 }
 
 async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = null, sourceUrl = null) {
-  if (!sock) return { sent: 0, reason: 'whatsapp_not_connected' };
+  const ready = await waitForWhatsAppReady(10000);
+  if (!ready || !isWhatsAppReady()) {
+    console.warn('[Publisher] WhatsApp não está pronto para publicar. Aguardando reconexão.');
+    return { sent: 0, reason: 'whatsapp_not_ready', state: connectionState, lastDisconnect: lastDisconnectInfo };
+  }
   if (paused && !overrideJid) return { sent: 0, reason: 'paused' };
-  if (!getSocketIdentityId()) return { sent: 0, reason: 'missing_whatsapp_identity' };
 
   const targetJid = overrideJid || config.whatsappGroupId;
   if (!targetJid) {
@@ -642,6 +703,11 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
 
   for (const offer of offers) {
     try {
+      if (!isWhatsAppReady()) {
+        console.warn('[Publisher] Conexão fechou durante o lote. Parando envio.');
+        break;
+      }
+
       const normalizedOffer = await validateForPublish(offer);
       if (!normalizedOffer) {
         console.log(`[Publisher] Oferta mantida para revisão de imagem: ${offer.title}`);
@@ -649,6 +715,12 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
       }
 
       const result = await sendOffer(targetJid, normalizedOffer);
+      if (result.mode === 'error') {
+        if (result.reason === 'whatsapp_not_ready') break;
+        console.warn(`[Publisher] Oferta não enviada: ${normalizedOffer.title} (${result.reason || 'error'})`);
+        continue;
+      }
+
       const persistedOffer = { ...normalizedOffer };
       delete persistedOffer.imageBuffer;
       delete persistedOffer.imageContentType;
@@ -663,6 +735,13 @@ async function publishNextOffers(limit = config.maxPostsPerRun, overrideJid = nu
       console.log(`[Publisher] Oferta enviada: ${normalizedOffer.title}`);
     } catch (error) {
       console.error('[Publisher] Falha ao enviar oferta:', error.stack || error.message);
+      if (shouldStopPublishOnError(error)) {
+        connectionState = 'close';
+        recordDisconnect(null, error.message);
+        scheduleReconnect(null, error.message);
+        console.warn('[Publisher] Conexão/sessão WhatsApp instável. Interrompendo lote para evitar spam e duplicidade.');
+        break;
+      }
     }
   }
 
@@ -673,4 +752,11 @@ process.on('exit', () => {
   closePlaywrightBrowser().catch(() => {});
 });
 
-module.exports = { connectWhatsApp, publishNextOffers, sendOfferDirect, getWhatsAppStatus, waitForWhatsAppReady };
+module.exports = {
+  connectWhatsApp,
+  publishNextOffers,
+  sendOfferDirect,
+  getWhatsAppStatus,
+  waitForWhatsAppReady,
+  isWhatsAppReady
+};
